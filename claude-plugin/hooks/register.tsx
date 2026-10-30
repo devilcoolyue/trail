@@ -145,14 +145,17 @@ async function summarizeMissing($: $, mode: string) {
   }
 }
 
-async function openPane($: $, query: string, mode: string): Promise<string> {
+async function openPane($: $, query: string, mode: string, isFullscreen: boolean): Promise<string> {
   await update($, queryAtom, () => query)
   const problem = await refresh($)
   const opened = await $.ui.open({ id: PANE, title: '对话索引', focus: true })
   $.clock.after(1, () => summarizeMissing($, mode).catch(err => logError($, err)))
   if (problem) return problem
   const n = (await read($, turnsAtom)).length
-  return opened.isPlaced ? `已打开对话索引（${n} 轮）` : `对话索引暂未显示：${opened.reason}`
+  if (!opened.isPlaced) return `对话索引暂未显示：${opened.reason}`
+  return isFullscreen
+    ? `已打开对话索引（${n} 轮）`
+    : `已打开对话索引（${n} 轮）。当前不是全屏界面，点击和跳回原位置都用不了，选中的一轮会在面板里展开；输入 /tui fullscreen 切换到全屏（会重启并恢复这个会话）`
 }
 
 // ───────────────────────── 文字排版 ─────────────────────────
@@ -192,6 +195,42 @@ function truncate(s: string, max: number): string {
     w += cw
   }
   return out + '…'
+}
+
+/** 按格宽折行，最多 max 行，放不下时最后一行以 … 结尾。 */
+function wrap(text: string, cols: number, max: number): string[] {
+  const lines: string[] = []
+  for (const para of text.split('\n')) {
+    let line = ''
+    let w = 0
+    for (const ch of para) {
+      const cw = cellWidth(ch.codePointAt(0) ?? 0)
+      if (w + cw > cols) {
+        lines.push(line)
+        line = ''
+        w = 0
+      }
+      line += ch
+      w += cw
+    }
+    if (line.trim() !== '') lines.push(line)
+  }
+  if (lines.length <= max) return lines
+  const kept = lines.slice(0, max)
+  kept[max - 1] = truncate(kept[max - 1] + '……', cols)
+  return kept
+}
+
+/** 回答的正文，去掉代码块和 Markdown 符号，留给非全屏时在面板里展开。 */
+function plainAnswer(answer: string): string {
+  return answer
+    .replace(/```[\s\S]*?```/g, '[代码]')
+    .replace(/[`*_#>|]/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '' && !/^[-:\s]+$/.test(l))
+    .join('\n')
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -243,7 +282,9 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'trail' }, async ($, e) => ({ text: await openPane($, e.args.trim(), mode) }))
+  on('command.run', { command: 'trail' }, async ($, e) => ({
+    text: await openPane($, e.args.trim(), mode, e.presentation?.isFullscreen !== false),
+  }))
 
   // 面板开着时，每轮结束后刷新索引并总结新的一轮
   on('turn.complete', async ($, e, next) => {
@@ -337,6 +378,89 @@ export const register: Register = (on, options) => {
         deny = String(err)
       }
       if (deny) $.ui.toast(jumpFailure(t, deny))
+    }
+
+    // 非全屏时面板在输入框上方：收不到点击，也滚不动对话，Tab 移到哪一行插件也不知道。
+    // 改由 j/k 选中，只画放得下的几行，标题、提示和按键说明一直看得见；选中的一轮直接展开回答
+    if (e.props.placement === 'inline') {
+      const at = shown.findIndex(t => t.id === selected)
+      const i = at >= 0 ? at : shown.length - 1
+      const sel = shown[i]
+      const move = (d: number) => {
+        const next = shown[Math.max(0, Math.min(shown.length - 1, i + d))]
+        if (next) return update($, selectedAtom, () => next.id)
+      }
+      const notice = '非全屏：点不了，也跳不回原位置 · 输入 /tui fullscreen 切换'
+
+      // 行数按优先级分：标题、提示、筛选、两条分隔线、按键说明一定要有，再是选中那一轮和它的总结，
+      // 剩下的给回答正文和其他轮（放不下时上下各留一行"还有几轮"）
+      const fixed = 6 + (busy !== '' ? 1 : 0)
+      let avail = Math.max(0, e.props.scroll.bodyRows - fixed - (sel ? 2 : 0))
+      const rest = Math.max(0, shown.length - 1)
+      const answer = sel ? plainAnswer(sel.answer) : ''
+      const wantAnswer = Math.min(8, Math.max(0, avail - Math.min(rest, 2) - (rest > 2 ? 2 : 0)))
+      const answerLines = sel && wantAnswer > 0 ? wrap(answer, cols - 7, wantAnswer) : []
+      avail -= answerLines.length
+      const others = avail >= rest ? rest : Math.max(0, avail - 2)
+      let from = Math.max(0, i - Math.floor(others / 2))
+      const to = Math.min(shown.length, from + others + 1)
+      from = Math.max(0, to - others - 1)
+      const visible = shown.slice(from, to)
+
+      const line = (t: TrailTurn) => {
+        const info = kindInfo(t.kind)
+        const isSel = t === sel
+        const head = `${isSel ? '▶' : t.isRewound ? '○' : '●'} ${pad(t.index)} `
+        const time = clock(t.time)
+        const prompt = truncate(t.prompt, cols - width(head) - width(info.label) - 1 - time.length - 2)
+        const fill = Math.max(1, cols - width(head) - width(info.label) - 1 - width(prompt) - time.length - 1)
+        const dim = t.isRewound
+        return (
+          <Button key={`t:${t.id}`} plain onPress={() => update($, selectedAtom, () => t.id)}>
+            <Text color={dim ? 'inactive' : info.color} bold={isSel}>{head}</Text>
+            <Text color={dim ? 'inactive' : info.color} bold={!dim}>{info.label}</Text>
+            <Text> </Text>
+            <Text color={dim ? 'inactive' : 'text'} bold={isSel} inverse={isSel} strikethrough={dim}>{prompt}</Text>
+            <Text>{' '.repeat(fill)}</Text>
+            <Text dimColor>{time}</Text>
+          </Button>
+        )
+      }
+
+      return (
+        <Box flexDirection="column">
+          {header}
+          <Text color="warning">{truncate(notice, cols)}</Text>
+          {tabs}
+          <Text dimColor>{'─'.repeat(cols)}</Text>
+          {all.length === 0 && <Text dimColor>这个会话还没有对话。</Text>}
+          {all.length > 0 && shown.length === 0 && <Text dimColor>没有匹配的对话。</Text>}
+          {from > 0 && <Text dimColor>{`  ↑ 还有 ${from} 轮`}</Text>}
+          {visible.map(t => (
+            <Box key={`row:${t.id}`} flexDirection="column">
+              {line(t)}
+              {t === sel && (
+                <Box flexDirection="column" paddingLeft={5}>
+                  <Text>
+                    <Text dimColor>↳ </Text>
+                    <Text color="subtle" italic={!t.isSummarized}>{truncate(t.isRewound ? '（已回退）' + t.summary : t.summary, cols - 7)}</Text>
+                  </Text>
+                  {answerLines.map((l, k) => (
+                    <Text key={`a:${k}`} dimColor>{`  ${l}`}</Text>
+                  ))}
+                </Box>
+              )}
+            </Box>
+          ))}
+          {to < shown.length && <Text dimColor>{`  ↓ 还有 ${shown.length - to} 轮`}</Text>}
+          <Text dimColor>{'─'.repeat(cols)}</Text>
+          <Box flexDirection="row" columnGap={2}>
+            <Button key="nav:up" plain hotkey="k" onPress={() => move(-1)}>上一轮</Button>
+            <Button key="nav:down" plain hotkey="j" onPress={() => move(1)}>下一轮</Button>
+            <Text dimColor>{e.props.isFocused ? '1-5 筛选 · Esc 回到输入框' : 'ctrl+x tab 进入面板后可用按键'}</Text>
+          </Box>
+        </Box>
+      )
     }
 
     // 每一轮：两行，第一行提问，第二行一句话总结
