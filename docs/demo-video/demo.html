@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- trail 演示动画：macOS 桌面 + Claude Code 终端。render(t) 按时间 t（秒）画出那一帧，render.mjs 逐帧截图合成视频。 -->
+<link rel="stylesheet" href="fonts.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+  :root {
+    --mono: JBM, JBMx, Sym2, Sym2b, Sym, 'Noto Sans Mono CJK SC', monospace;
+    --ui: Inter, 'Noto Sans CJK SC', sans-serif;
+    --claude: #d97757; --plan: #b1b9f9; --change: #4eba65; --ask: #7cc4f5; --debug: #f5c04a;
+    --text: #e8e6e3; --dim: #8a8a8a; --subtle: #a8a8a8; --add: #4eba65; --del: #e06c75;
+    --row: 21px;
+  }
+  #desk {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 60% 55% at 18% 28%, rgba(255,150,90,.85), transparent 70%),
+      radial-gradient(ellipse 55% 60% at 85% 18%, rgba(110,92,255,.9), transparent 70%),
+      radial-gradient(ellipse 60% 50% at 62% 95%, rgba(255,80,140,.75), transparent 70%),
+      radial-gradient(ellipse 40% 40% at 40% 60%, rgba(60,140,255,.55), transparent 70%),
+      linear-gradient(135deg, #1b1f4a, #3a1c5c 50%, #0f2a4a);
+  }
+  /* 菜单栏 */
+  #menubar {
+    position: absolute; left: 0; right: 0; top: 0; height: 30px;
+    background: rgba(30, 20, 50, .35); backdrop-filter: blur(20px);
+    display: flex; align-items: center; padding: 0 18px; gap: 22px;
+    font: 500 14px var(--ui); color: #fff; letter-spacing: .1px;
+  }
+  #menubar b { font-weight: 700; }
+  #menubar .right { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+  /* Dock */
+  #dock {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    height: 74px; padding: 8px 10px; display: flex; gap: 10px; align-items: center;
+    background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.25);
+    border-radius: 22px; backdrop-filter: blur(24px);
+  }
+  .icon { width: 56px; height: 56px; border-radius: 13px; position: relative; box-shadow: 0 2px 6px rgba(0,0,0,.25); overflow: hidden; }
+  .icon .run { position: absolute; }
+  .dot { position: absolute; bottom: -7px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 2px; background: rgba(255,255,255,.85); }
+  .sep { width: 1px; height: 52px; background: rgba(255,255,255,.35); margin: 0 4px; }
+  .slot { position: relative; }
+  /* 终端窗口 */
+  #win {
+    position: absolute; left: 100px; top: 54px; width: 1720px; height: 858px;
+    border-radius: 12px; overflow: hidden; background: rgba(22,22,24,.97);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.12);
+    transform-origin: 50% 60%;
+  }
+  #titlebar {
+    height: 30px; background: linear-gradient(#3a3a3c, #323234); border-bottom: 1px solid #1c1c1e;
+    display: flex; align-items: center; justify-content: center; position: relative;
+    font: 500 13px var(--ui); color: #c8c8c8;
+  }
+  .lights { position: absolute; left: 14px; top: 9px; display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 6px; display: block; }
+  #term { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; font: 15px/var(--row) var(--mono); color: var(--text); font-variant-ligatures: none; font-feature-settings: 'calt' 0, 'liga' 0; tab-size: 4; }
+  #end .cmd { font-variant-ligatures: none; font-feature-settings: 'calt' 0; }
+  #view { position: absolute; left: 0; top: 0; right: 0; bottom: 118px; overflow: hidden; }
+  #content { position: absolute; left: 0; top: 0; right: 0; padding: 10px 22px 6px 22px; will-change: transform; }
+  .ln { min-height: var(--row); white-space: pre-wrap; word-break: break-all; }
+  .dim { color: var(--dim); }
+  .it { font-style: italic; }
+  .prompt { background: #2f2f33; margin: 10px -22px 8px; padding: 2px 22px; position: relative; }
+  .prompt .car { color: #9a9a9a; }
+  .glow { position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px var(--claude); background: rgba(217,119,87,.18); opacity: 0; }
+  .think { color: #7d7d82; font-style: italic; padding-left: 2ch; }
+  .tool b { color: var(--text); }
+  .bul { color: var(--change); }
+  .bulw { color: var(--text); }
+  .res { color: var(--dim); padding-left: 2ch; }
+  .diff { padding-left: 6ch; }
+  .diff .l { display: block; white-space: pre; }
+  .diff .a { background: rgba(78,186,101,.22); }
+  .diff .d { background: rgba(224,108,117,.22); }
+  .diff .n { color: #6e6e73; display: inline-block; width: 5ch; text-align: right; margin-right: 1ch; }
+  .worked { color: #7d7d82; margin: 6px 0 4px; }
+  .ans { padding-left: 2ch; }
+  .ans .h { color: #fff; font-weight: 700; }
+  .code { color: #e5c07b; }
+  /* 输入框和状态栏 */
+  #bottom { position: absolute; left: 0; right: 0; bottom: 0; height: 118px; padding: 0 22px; }
+  .rule { border-top: 1px solid #5a5a5e; height: 0; margin: 0 -22px; }
+  #input { height: 34px; display: flex; align-items: center; gap: 1ch; font: 15px var(--mono); }
+  #input .car { color: #d0d0d0; }
+  #caret { display: inline-block; width: 9px; height: 19px; background: #e8e6e3; vertical-align: -4px; }
+  #status { padding-top: 6px; font: 14px/22px var(--mono); color: var(--dim); }
+  #suggest { position: absolute; left: 0; right: 0; top: 41px; bottom: 0; padding: 6px 22px; font: 14px/22px var(--mono); background: rgba(22,22,24,1); }
+  #suggest .s { display: flex; gap: 3ch; }
+  #suggest .s.on { color: var(--plan); }
+  /* 对话索引面板 */
+  #pane {
+    position: absolute; top: 0; right: 0; bottom: 118px; width: 800px;
+    border-left: 1px solid #7ea6c9; background: rgba(22,22,24,1); padding: 8px 18px 0 16px;
+    font: 15px/var(--row) var(--mono);
+  }
+  #pane .close { position: absolute; right: 16px; top: 8px; color: var(--dim); }
+  .hdr .t { color: var(--claude); font-weight: 700; }
+  .tabs { display: flex; gap: 2ch; margin-top: 2px; }
+  .tab .k { color: var(--dim); }
+  .tab.on span.lab { color: #161618 !important; font-weight: 700; padding: 0 1ch; }
+  .hr { border-top: 1px solid #4a4a4e; margin: 9px 0 9px; }
+  .r { position: relative; padding: 1px 0 1px; }
+  .r .l1, .r .l2 { display: flex; white-space: nowrap; height: var(--row); line-height: var(--row); }
+  .r .l1 > span, .r .l2 > span { line-height: var(--row); height: var(--row); }
+  .r .g { width: 3.6ch; flex: none; letter-spacing: -1px; }
+  .r .idx { width: 3ch; flex: none; }
+  .r .kind { font-weight: 700; flex: none; margin-right: 1ch; }
+  .r .p { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .r .tm { flex: none; color: var(--dim); margin-left: 2ch; }
+  .r .l2 .g { color: var(--dim); }
+  .r .arrow { flex: none; width: 5ch; color: var(--dim); display: flex; align-items: center; padding-left: 1.5ch; }
+  .r .sum { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--subtle); }
+  .r .sum.rule { font-style: italic; color: #7d7d82; padding-left: .6ch; }
+  .r .meta { flex: none; color: var(--add); opacity: .8; margin-left: 2ch; }
+  .r.rew .kind, .r.rew .idx, .r.rew .g, .r.rew .p, .r.rew .meta { color: #5c5c60 !important; }
+  .r.rew .p { text-decoration: line-through; }
+  .r.focus { background: rgba(255,255,255,.09); box-shadow: inset 3px 0 0 var(--claude); }
+  .r.focus .p { font-weight: 700; }
+  .det { padding-left: 7ch; color: var(--dim); }
+  .det .v { color: var(--subtle); }
+  .det .f { display: flex; }
+  .det .f .path { flex: 1; color: var(--text); }
+  .det .A { color: var(--change); width: 2ch; } .det .M { color: var(--debug); width: 2ch; }
+  .chip { color: var(--debug); }
+  .foot { color: var(--dim); }
+  /* 演示用的叠加层 */
+  #caption {
+    position: absolute; left: 50%; top: 926px; transform: translateX(-50%);
+    padding: 10px 26px; border-radius: 26px; white-space: nowrap;
+    background: rgba(12,12,16,.78); border: 1px solid rgba(255,255,255,.14);
+    font: 600 26px var(--ui); color: #fff; letter-spacing: .5px; backdrop-filter: blur(10px);
+  }
+  #caption em { font-style: normal; color: #ffb38f; font-family: var(--mono); font-weight: 700; }
+  #keys { position: absolute; right: 120px; top: 930px; display: flex; gap: 10px; }
+  .key {
+    min-width: 46px; height: 46px; padding: 0 14px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(#fafafa, #dcdce0); color: #222; font: 600 20px var(--mono);
+    box-shadow: 0 4px 0 #9a9aa2, 0 8px 18px rgba(0,0,0,.35);
+  }
+  #callout { position: absolute; border: 2px solid var(--claude); border-radius: 8px; box-shadow: 0 0 0 4px rgba(217,119,87,.18); pointer-events: none; }
+  #callout .tag { position: absolute; right: calc(100% + 12px); top: 50%; transform: translateY(-50%); white-space: nowrap; background: var(--claude); color: #1a1a1a; font: 700 15px var(--ui); padding: 3px 10px; border-radius: 6px; }
+  #end { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; color: #fff; background: rgba(10,10,18,.62); backdrop-filter: blur(16px); }
+  #end .logo { font: 800 96px var(--ui); letter-spacing: -1px; display: flex; align-items: center; gap: 22px; }
+  #end .logo span { font-family: var(--mono); color: var(--claude); font-size: 92px; }
+  #end .tag { font: 500 34px var(--ui); color: #e8e8ee; }
+  #end .feats { display: flex; gap: 26px; margin-top: 10px; }
+  #end .feat { width: 300px; padding: 20px 22px; border-radius: 16px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); font: 500 21px/1.5 var(--ui); color: #ddd; }
+  #end .feat b { display: block; color: #fff; font-size: 24px; margin-bottom: 6px; }
+  #end .cmd { margin-top: 18px; font: 600 26px var(--mono); background: #18181b; border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 16px 28px; color: #e8e6e3; }
+  #end .cmd .p { color: var(--claude); }
+  #end .note { font: 500 20px var(--ui); color: #b8b8c4; }
+</style>
+</head>
+<body>
+<div id="desk"></div>
+
+<div id="menubar">
+  <svg width="15" height="18" viewBox="0 0 170 200"><path fill="#fff" d="M150 157c-6 14-9 20-17 32-11 17-27 38-46 38-17 0-21-11-44-11s-28 11-45 11C-21 227-37 208-48 191c-31-47-34-103-15-132 13-21 35-33 55-33 21 0 34 11 51 11 16 0 26-11 51-11 18 0 37 10 51 27-45 25-38 89 6 104z" transform="translate(48 -27)"/><path fill="#fff" d="M118 0c2 14-4 28-11 38-8 10-21 18-34 17-2-14 4-27 11-36 8-10 22-18 34-19z"/></svg>
+  <b>终端</b><span>Shell</span><span>编辑</span><span>显示</span><span>窗口</span><span>帮助</span>
+  <div class="right">
+    <svg width="18" height="14" viewBox="0 0 24 18"><path fill="#fff" d="M12 15.5a2 2 0 1 0 0 .01zM5.6 10.9l1.6 1.6a6.8 6.8 0 0 1 9.6 0l1.6-1.6a9 9 0 0 0-12.8 0zM2.4 7.7 4 9.3a11.3 11.3 0 0 1 16 0l1.6-1.6a13.6 13.6 0 0 0-19.2 0zM-.8 4.5.8 6.1a15.8 15.8 0 0 1 22.4 0l1.6-1.6a18 18 0 0 0-25.6 0z"/></svg>
+    <svg width="26" height="13" viewBox="0 0 26 13"><rect x=".5" y=".5" width="22" height="12" rx="3" fill="none" stroke="#fff" opacity=".8"/><rect x="2.5" y="2.5" width="15" height="8" rx="1.5" fill="#fff"/><rect x="23.5" y="4.5" width="2" height="4" rx="1" fill="#fff" opacity=".8"/></svg>
+    <span>10月30日 周四  14:58</span>
+  </div>
+</div>
+
+<div id="dock">
+  <div class="slot"><div class="icon" style="background:linear-gradient(90deg,#1d8cf8 50%,#c9e7ff 50%)"><svg width="56" height="56"><circle cx="18" cy="22" r="2.6" fill="#0b2a52"/><circle cx="38" cy="22" r="2.6" fill="#0b2a52"/><path d="M14 36q14 9 28 0" stroke="#0b2a52" stroke-width="2.6" fill="none"/><path d="M28 8q-6 18 0 34" stroke="#0b2a52" stroke-width="2" fill="none"/></svg></div></div>
+  <div class="slot"><div class="icon" style="background:radial-gradient(circle,#fff 0 40%,#e9eef5 41%)"><svg width="56" height="56"><circle cx="28" cy="28" r="22" fill="url(#sf)"/><defs><linearGradient id="sf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3fb4ff"/><stop offset="1" stop-color="#1468e8"/></linearGradient></defs><path d="M28 28 40 14 32 32z" fill="#ff3b30"/><path d="M28 28 16 42 24 24z" fill="#fff"/></svg></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#ffd84d 0 22%,#fffdf5 22%)"><svg width="56" height="56"><g stroke="#ddd6c4" stroke-width="2"><line x1="10" y1="24" x2="46" y2="24"/><line x1="10" y1="32" x2="46" y2="32"/><line x1="10" y1="40" x2="40" y2="40"/></g></svg></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#d9805f,#c25f3f);display:flex;align-items:center;justify-content:center;font:40px var(--mono);color:#fff">✻</div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#4a4a4e,#1d1d20);border:1px solid #666"><div style="position:absolute;left:9px;top:8px;font:700 19px var(--mono);color:#e8e8e8">&gt;_</div></div><div class="dot"></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#9ea3ab,#6c7179);display:flex;align-items:center;justify-content:center;font:38px Sym,var(--mono);color:#e9ebee">⚙</div></div>
+  <div class="sep"></div>
+  <div class="slot"><div class="icon" style="background:transparent;box-shadow:none"><svg width="56" height="56"><path d="M14 14h28l-3 36H17z" fill="rgba(255,255,255,.55)" stroke="rgba(255,255,255,.8)"/><g stroke="rgba(120,120,130,.6)"><line x1="22" y1="18" x2="23" y2="46"/><line x1="28" y1="18" x2="28" y2="46"/><line x1="34" y1="18" x2="33" y2="46"/></g></svg></div></div>
+</div>
+
+<div id="win">
+  <div id="titlebar">
+    <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <span>shop-api — claude — 172×40</span>
+  </div>
+  <div id="term">
+    <div id="view"><div id="content"></div></div>
+    <div id="pane"></div>
+    <div id="bottom">
+      <div class="rule"></div>
+      <div id="input"><span class="car">❯</span><span id="typed"></span><span id="caret"></span></div>
+      <div class="rule"></div>
+      <div id="status"><div>  [Opus 5.5] │ shop-api  ⎇ feat/idempotency</div><div>  ⏵⏵ auto mode on (shift+tab to cycle)</div></div>
+      <div id="suggest"></div>
+    </div>
+  </div>
+</div>
+
+<div id="callout" style="display:none"><div class="tag">回退掉的分支</div></div>
+<div id="caption" style="opacity:0"></div>
+<div id="keys"></div>
+<div id="end" style="opacity:0">
+  <div class="logo"><span>✻</span>trail</div>
+  <div class="tag">Claude Code 对话索引面板</div>
+  <div class="feats">
+    <div class="feat"><b>一眼看全</b>每一轮的提问 + haiku 一句话总结，不再被思考链和 diff 淹没</div>
+    <div class="feat"><b>一键跳回</b>选中一轮按回车，对话滚回当时的位置</div>
+    <div class="feat"><b>筛选与搜索</b>方案 / 改动 / 提问 / 排错，或 /trail 关键词</div>
+  </div>
+  <div class="cmd"><span class="p">❯</span> /plugin install trail --marketplace devilcoolyue/trail</div>
+  <div class="note">也支持 Codex：在 tmux 里弹出 trail 面板，同样能跳回终端原位置</div>
+</div>
+
+<script>
+// ───────────── 演示数据（虚构的 shop-api 会话） ─────────────
+const ARROW = '<svg width="14" height="12" viewBox="0 0 14 12"><path d="M2 0v7h9" stroke="#8a8a8a" stroke-width="1.5" fill="none"/><path d="M8.5 4l3 3-3 3" stroke="#8a8a8a" stroke-width="1.5" fill="none"/></svg>'
+const UNDO = '<svg width="13" height="12" viewBox="0 0 13 12" style="vertical-align:-1px"><path d="M4 2.5h4.5a3.5 3.5 0 0 1 0 7H3" stroke="#5c5c60" stroke-width="1.5" fill="none"/><path d="M6 0 3.2 2.5 6 5" stroke="#5c5c60" stroke-width="1.5" fill="none"/></svg>'
+
+const TURNS = [
+  { i: 1, kind: 'ask', time: '14:02', prompt: '先读一下 internal/order 目录，说说现在下单流程是怎么走的，有哪些地方可能重复扣库存？',
+    rule: '下单链路：handler.CreateOrder → service.PlaceOrder → stock.Deduct…', sum: '梳理下单链路，定位 3 处重复扣减风险',
+    tools: 'Read×6 · Grep×3', think: '1.2k' },
+  { i: 2, kind: 'plan', time: '14:06', prompt: '给我设计一个幂等方案，要求网关重试、MQ 重投、用户双击都能扛住，先别写代码',
+    rule: '建议分三层：', sum: '三层幂等：业务唯一键 + Redis 预占 + DB 唯一索引兜底', tools: 'Read×2', think: '3.8k' },
+  { i: 3, kind: 'ask', time: '14:11', prompt: 'Redis 挂了怎么办？会不会整个下单不可用',
+    rule: '不会整个不可用。', sum: 'Redis 故障时降级为仅 DB 唯一索引，不阻断下单' },
+  { i: 4, kind: 'change', time: '14:15', prompt: '按方案实现吧，先做 Redis 预占这层',
+    rule: '已完成 Redis 预占层。', sum: '新增 idem 包与中间件，接入 CreateOrder', files: [['A', 'idem/redis.go', 96, 0], ['A', 'idem/middleware.go', 52, 0], ['M', 'order/handler.go', 16, 12]], tools: 'Write×2 · Update×1 · Bash×2' },
+  { i: 5, kind: 'change', time: '14:22', rew: true, prompt: 'DB 兜底用乐观锁 version 字段来做',
+    rule: '已加 version 字段并在插入时校验。', sum: '' },
+  { i: 6, kind: 'debug', time: '14:28', rew: true, prompt: '测试挂了：duplicate key 还是能插进来',
+    rule: '乐观锁挡不住并发插入。', sum: '' },
+  { i: 7, kind: 'change', time: '14:33', prompt: 'DB 兜底改用唯一索引 (user_id, idem_key)，冲突时查出已有订单返回',
+    rule: '唯一索引已加上。', sum: '唯一索引兜底 + 冲突回查，迁移脚本 0042', files: [['A', 'migrations/0042_order_idem.sql', 12, 0], ['M', 'order/repo.go', 38, 6]], tools: 'Write×1 · Update×2 · Bash×3', think: '0.9k' },
+  { i: 8, kind: 'plan', time: '14:40', prompt: 'MQ 消费侧怎么接？onPaid 里还有发券逻辑',
+    rule: '消费侧建议用 event_id 预占。', sum: '消费侧以 event_id 预占，发券拆为独立幂等步骤', think: '2.1k' },
+  { i: 9, kind: 'change', time: '14:45', prompt: '实现消费侧，顺便把发券拆出来',
+    rule: '消费侧已接入幂等。', sum: 'onPaid 接入幂等，拆出 coupon.Grant', files: [['M', 'order/consumer.go', 64, 38], ['A', 'coupon/grant.go', 51, 0], ['M', 'order/service.go', 6, 6]] },
+  { i: 10, kind: 'debug', time: '14:54', prompt: 'CI 上 TestOnPaid_Concurrent 偶发失败，帮我看下',
+    rule: '原因是测试之间共享了 Redis key 前缀。', sum: '测试共享 Redis key 前缀导致串扰，改为随机前缀', files: [['M', 'order/consumer_test.go', 3, 1]] },
+]
+const KINDS = [['', '全部', 'claude'], ['plan', '方案', 'plan'], ['change', '改动', 'change'], ['ask', '提问', 'ask'], ['debug', '排错', 'debug']]
+
+// ───────────── 左侧的对话：思考、工具、diff 很多 ─────────────
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const L = (cls, html) => `<div class="ln ${cls}">${html}</div>`
+const prompt = (n, s) => `<div class="ln prompt" id="p${n}"><span class="car">❯ </span>${esc(s)}<div class="glow"></div></div>`
+const think = (secs, lines) => L('dim it', `✻ Thinking… (${secs}s)`) + lines.map(x => L('think', esc(x))).join('')
+const tool = (name, arg, res) => L('tool', `<span class="bul">●</span> <b>${name}</b>(${esc(arg)})`) +
+  (res ? res.split('\n').map((x, k) => L('res', (k ? '   ' : '⎿  ') + esc(x))).join('') : '')
+const diff = (start, lines) => '<div class="diff">' + lines.map((x, k) => {
+  const t = x[0] === '+' ? 'a' : x[0] === '-' ? 'd' : ''
+  return `<span class="l ${t}"><span class="n">${start + k}</span>${esc(x)}</span>`
+}).join('') + '</div>'
+const ans = lines => L('', `<span class="bulw">●</span> ${lines[0]}`) + lines.slice(1).map(x => L('ans', x)).join('')
+const worked = s => L('worked', `✻ Worked for ${s}`)
+
+const TRANSCRIPT = [
+  L('', '<span style="color:var(--claude)"> ▐▛███▜▌</span>   <b>Claude Code</b> v2.1.312'),
+  L('', '<span style="color:var(--claude)">▝▜█████▛▘</span>  <span class="dim">Opus 5.5 · Claude Max</span>'),
+  L('', '<span style="color:var(--claude)">  ▘▘ ▝▝ </span>   <span class="dim">~/code/shop-api</span>'),
+
+  prompt(1, TURNS[0].prompt),
+  think(9, ['用户想了解下单链路，以及扣库存可能重复的地方。先看 handler，再看 service 和 repo，', '注意扣库存发生在事务内还是事务外，MQ 消费是否会重复触发……']),
+  tool('Read', 'internal/order/handler.go', 'Read 143 lines'),
+  tool('Read', 'internal/order/service.go', 'Read 212 lines'),
+  tool('Search', 'pattern: "DeductStock", path: "internal"', 'Found 4 files'),
+  tool('Read', 'internal/stock/stock.go', 'Read 96 lines'),
+  tool('Read', 'internal/order/consumer.go', 'Read 88 lines'),
+  ans(['下单链路：<span class="code">handler.CreateOrder</span> → <span class="code">service.PlaceOrder</span> → <span class="code">stock.Deduct</span> → <span class="code">repo.Insert</span> → <span class="code">mq.Publish</span>。',
+    '可能重复扣库存的 3 个地方：',
+    '1. 网关超时重试：PlaceOrder 没有任何去重，重试会再扣一次',
+    '2. 用户双击提交：两个请求并发进入 Deduct',
+    '3. MQ 重投：onPaid 消费失败重试时，发券和扣减都会再执行']),
+  worked('1m 52s'),
+
+  prompt(2, TURNS[1].prompt),
+  think(31, ['三种来源的重复：网关重试、MQ 重投、用户双击。单靠一层不够——', 'token 表需要额外一次往返；分布式锁在 Redis 主从切换时可能失效，所以 DB 必须兜底。', '对比三种做法：token 表 / 分布式锁 / 状态机。状态机只能防状态回退，防不住重复插入。', '方案：客户端生成 idem_key，网关透传；Redis SET NX 预占；DB 唯一索引兜底……']),
+  tool('Read', 'internal/order/model.go', 'Read 61 lines'),
+  tool('Read', 'migrations/0041_orders.sql', 'Read 34 lines'),
+  ans(['<span class="h">建议分三层：</span>',
+    '1. <b>业务唯一键</b>：客户端生成 <span class="code">idem_key</span>，网关透传，重试时保持不变',
+    '2. <b>Redis 预占</b>：<span class="code">SET idem:{user}:{key} NX EX 600</span>，占不到直接返回「处理中」',
+    '3. <b>DB 唯一索引兜底</b>：<span class="code">(user_id, idem_key)</span> 唯一，冲突时查出已有订单返回',
+    '',
+    '  来源        挡在哪一层      结果',
+    '  网关重试    Redis 预占      返回同一个订单',
+    '  用户双击    Redis 预占      第二次返回「处理中」',
+    '  MQ 重投     消费侧 event_id  跳过已处理的消息']),
+  worked('3m 40s'),
+
+  prompt(3, TURNS[2].prompt),
+  think(6, ['Redis 只是预占层，挂掉时可以降级，靠 DB 唯一索引保证正确性……']),
+  ans(['不会整个不可用。Redis 只用来提前挡掉重复请求：',
+    '- Redis 超时或报错时跳过预占，直接走 DB，唯一索引仍然保证不会重复下单',
+    '- 代价是这段时间重复请求会多打一次 DB，可以加个熔断开关']),
+  worked('48s'),
+
+  prompt(4, TURNS[3].prompt),
+  think(12, ['先写 idem 包：Reserve / Release / Done 三个方法，key 带 user 维度……']),
+  tool('Write', 'internal/idem/redis.go', 'Wrote 96 lines to internal/idem/redis.go'),
+  diff(1, ['+package idem', '+', '+// Store 用 Redis 预占幂等键：同一个键在 TTL 内只能被占一次。', '+type Store struct {', '+\trdb *redis.Client', '+\tttl time.Duration', '+}', '+', '+func (s *Store) Reserve(ctx context.Context, key string) (bool, error) {', '+\tok, err := s.rdb.SetNX(ctx, "idem:"+key, "pending", s.ttl).Result()', '+\tif err != nil {', '+\t\treturn true, err // Redis 不可用时放行，由 DB 唯一索引兜底', '+\t}', '+\treturn ok, nil', '+}']),
+  tool('Write', 'internal/idem/middleware.go', 'Wrote 52 lines to internal/idem/middleware.go'),
+  tool('Update', 'internal/order/handler.go', 'Added 16 lines, removed 12 lines'),
+  diff(38, [' func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {', '-\treq, err := decode(r)', '-\tif err != nil {', '-\t\twriteErr(w, err)', '-\t\treturn', '-\t}', '+\tkey := r.Header.Get("Idempotency-Key")', '+\tif key == "" {', '+\t\twriteErr(w, ErrMissingIdemKey)', '+\t\treturn', '+\t}', '+\tif ok, _ := h.idem.Reserve(r.Context(), userID(r)+":"+key); !ok {', '+\t\twriteJSON(w, http.StatusAccepted, pending)', '+\t\treturn', '+\t}']),
+  tool('Bash', 'go build ./... && go test ./internal/idem/... ./internal/order/...', 'ok  shop-api/internal/idem   0.214s\nok  shop-api/internal/order  1.032s'),
+  ans(['已完成 Redis 预占层：新增 <span class="code">internal/idem</span>（Store + 中间件），CreateOrder 要求带 <span class="code">Idempotency-Key</span>。']),
+  worked('6m 05s'),
+
+  prompt(7, TURNS[6].prompt),
+  think(14, ['乐观锁那条路挡不住并发插入，回到唯一索引。冲突时用 ON CONFLICT DO NOTHING，', '然后按 (user_id, idem_key) 查出已有订单返回，保证同一个键总是得到同一个订单……']),
+  tool('Write', 'migrations/0042_order_idem.sql', 'Wrote 12 lines'),
+  diff(1, ['+ALTER TABLE orders ADD COLUMN idem_key text;', '+CREATE UNIQUE INDEX CONCURRENTLY orders_user_idem', '+    ON orders (user_id, idem_key) WHERE idem_key IS NOT NULL;']),
+  tool('Update', 'internal/order/repo.go', 'Added 38 lines, removed 6 lines'),
+  diff(71, [' func (r *Repo) Insert(ctx context.Context, o *Order) (*Order, error) {', '-\t_, err := r.db.ExecContext(ctx, insertSQL, o.args()...)', '-\treturn o, err', '+\tres, err := r.db.ExecContext(ctx, insertSQL+" ON CONFLICT DO NOTHING", o.args()...)', '+\tif err != nil {', '+\t\treturn nil, err', '+\t}', '+\tif n, _ := res.RowsAffected(); n == 0 {', '+\t\treturn r.ByIdemKey(ctx, o.UserID, o.IdemKey) // 已经下过单：返回那一单', '+\t}', '+\treturn o, nil']),
+  tool('Bash', 'go test ./internal/order/... -run Idem -count=20', 'ok  shop-api/internal/order  3.418s'),
+  ans(['唯一索引已加上（迁移 0042），重复插入时查出已有订单返回，并发测试 20 次全过。']),
+  worked('4m 21s'),
+
+  prompt(8, TURNS[7].prompt),
+  think(22, ['消费侧的重复来自 MQ 至少一次投递。用消息的 event_id 预占；', '发券是外部调用，不能和扣减放在一个事务里，拆成独立步骤，各自幂等……']),
+  tool('Read', 'internal/order/consumer.go', 'Read 88 lines'),
+  tool('Read', 'internal/coupon/client.go', 'Read 57 lines'),
+  ans(['<span class="h">消费侧：</span>以 <span class="code">event_id</span> 预占，处理完标记 done；',
+    '发券拆成独立的 <span class="code">coupon.Grant</span>，用 <span class="code">order_id</span> 作为幂等键，失败单独重试，不影响订单状态。']),
+  worked('2m 58s'),
+
+  prompt(9, TURNS[8].prompt),
+  tool('Update', 'internal/order/consumer.go', 'Added 64 lines, removed 38 lines'),
+  diff(22, [' func (c *Consumer) onPaid(ctx context.Context, m *mq.Message) error {', '-\tif err := c.svc.MarkPaid(ctx, m.OrderID); err != nil {', '-\t\treturn err', '-\t}', '-\treturn c.coupon.Send(ctx, m.UserID, m.OrderID)', '+\tif ok, err := c.idem.Reserve(ctx, "evt:"+m.EventID); err == nil && !ok {', '+\t\treturn nil // 重投的消息：已经处理过', '+\t}', '+\tif err := c.svc.MarkPaid(ctx, m.OrderID); err != nil {', '+\t\tc.idem.Release(ctx, "evt:"+m.EventID)', '+\t\treturn err', '+\t}', '+\treturn c.jobs.Enqueue(ctx, coupon.GrantJob{OrderID: m.OrderID})']),
+  tool('Write', 'internal/coupon/grant.go', 'Wrote 51 lines'),
+  tool('Update', 'internal/order/service.go', 'Added 6 lines, removed 6 lines'),
+  tool('Bash', 'go test ./... 2>&1 | tail -5', 'ok  shop-api/internal/coupon  0.391s\nok  shop-api/internal/order   2.877s'),
+  ans(['onPaid 接入幂等，发券拆成 <span class="code">coupon.Grant</span>，通过任务队列异步执行。']),
+  worked('7m 12s'),
+
+  prompt(10, TURNS[9].prompt),
+  tool('Bash', 'go test -race -count=50 -run TestOnPaid_Concurrent ./internal/order/', '--- FAIL: TestOnPaid_Concurrent (0.31s)\n    consumer_test.go:88: granted 2 coupons, want 1\nFAIL'),
+  think(17, ['只在 -count 大于 1 时失败，说明测试之间互相影响。两个用例用了同一个 key 前缀 "test:"，', '前一个用例占住的 key 在 TTL 内还在……']),
+  tool('Update', 'internal/order/consumer_test.go', 'Added 3 lines, removed 1 line'),
+  diff(31, ['-\tprefix := "test:"', '+\t// 每个用例用自己的前缀，避免共享 Redis 时互相影响', '+\tprefix := fmt.Sprintf("test:%s:%d:", t.Name(), rand.Int63())']),
+  tool('Bash', 'go test -race -count=50 -run TestOnPaid_Concurrent ./internal/order/', 'ok  shop-api/internal/order  9.214s'),
+  ans(['原因是测试之间共享了 Redis key 前缀，改成每个用例随机前缀后跑 50 次全过。']),
+  worked('3m 33s'),
+  '<div id="cmd1"></div><div id="cmd2"></div>',
+].join('')
+
+document.getElementById('content').innerHTML = TRANSCRIPT
+const cmdLines = q => L('', '') + `<div class="ln prompt" style="margin-top:2px"><span class="car">❯ </span>/trail${q ? ' ' + q : ''}</div>` + L('dim', '  ⎿  trail: 已打开对话索引（10 轮）')
+
+// ───────────── 时间线 ─────────────
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x))
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1)
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
+const easeOut = x => 1 - Math.pow(1 - x, 3)
+const at = (t, steps) => { let v = steps[0][1]; for (const [s, x] of steps) if (t >= s) v = x; return v }
+
+const CAPTIONS = [
+  [1.0, 8.4, '长对话里，之前定下的方案在哪？'],
+  [3.4, 10.4, '思考过程、工具调用、代码 diff 刷满整屏，只能一路往回翻'],
+  [10.6, 14.0, '输入 <em>/trail</em>'],
+  [14.2, 19.3, '每一轮列出你的提问，haiku 自动写一句话总结'],
+  [19.5, 24.8, '按 方案 / 改动 / 提问 / 排错 一键筛选'],
+  [25.0, 31.3, '选中一轮按回车，对话立刻滚回当时的位置'],
+  [31.5, 39.8, '这一轮用了哪些工具、改了哪些文件，展开就能看到'],
+  [40.0, 46.0, 'Esc Esc 回退掉的尝试也留在索引里，灰色标出'],
+  [46.2, 51.8, '<em>/trail 关键词</em> 直接搜索提问、总结和文件'],
+]
+// 文字被拆开的两条字幕：第二条出现时第一条已结束
+CAPTIONS[0][1] = 3.3
+
+const KEYS = [
+  [11.0, 12.5, () => '/trail'.slice(0, typedCount(T, 11.0, 6, .13))],
+  [12.6, 13.5, () => '⏎'], [19.8, 20.7, () => '2'], [21.8, 22.7, () => '3'], [23.8, 24.7, () => '1'],
+  [25.5, 25.95, () => 'Tab'], [26.0, 26.9, () => 'Tab'], [27.0, 27.9, () => '⏎'],
+  [31.8, 32.15, () => 'Tab'], [32.2, 32.55, () => 'Tab'], [32.6, 32.95, () => 'Tab'], [33.0, 33.35, () => 'Tab'], [33.4, 33.9, () => 'Tab'], [34.0, 34.9, () => '⏎'],
+  [46.2, 46.55, () => 'Esc'], [46.6, 47.9, () => '/trail Redis'.slice(0, typedCount(T, 46.6, 12, .1))], [48.0, 48.9, () => '⏎'],
+]
+let T = 0
+const typedCount = (t, start, n, step) => clamp(Math.floor((t - start) / step) + 1, 0, n)
+
+const FOCUS = [[0, null], [25.5, 1], [26.0, 2], [31.8, 3], [32.2, 4], [32.6, 5], [33.0, 6], [33.4, 7], [46.2, null]]
+const OPEN = [[0, null], [27.0, 2], [34.0, 7]]
+const FILTER = [[0, ''], [19.8, 'plan'], [21.8, 'change'], [23.8, '']]
+
+const view = document.getElementById('view')
+const content = document.getElementById('content')
+const pane = document.getElementById('pane')
+let lastPaneKey = ''
+
+function maxScroll() { return Math.max(0, content.scrollHeight - view.clientHeight) }
+function targetOf(n) { return clamp(document.getElementById('p' + n).offsetTop - 12, 0, maxScroll()) }
+
+function scrollAt(t) {
+  const bottom = maxScroll()
+  const hunt = bottom * 0.2
+  if (t < 2.6) return bottom
+  if (t < 8.6) {
+    // 像滚轮一样一下一下往上翻
+    const p = seg(t, 2.6, 8.6) * 9
+    const k = Math.floor(p), f = p - k
+    const flick = (Math.min(k, 9) + easeOut(clamp(f / 0.55, 0, 1))) / 9
+    return bottom - (bottom - hunt) * clamp(flick, 0, 1)
+  }
+  if (t < 10.4) return hunt + (bottom - hunt) * ease(seg(t, 8.6, 10.4))
+  if (t < 27.0) return bottom
+  const t2 = targetOf(2), t7 = targetOf(7)
+  if (t < 28.2) return bottom + (t2 - bottom) * ease(seg(t, 27.0, 28.2))
+  if (t < 34.0) return t2
+  if (t < 35.2) return t2 + (t7 - t2) * ease(seg(t, 34.0, 35.2))
+  if (t < 48.0) return t7
+  return t7 + (bottom - t7) * ease(seg(t, 48.0, 48.5))
+}
+
+function paneHTML(t) {
+  const filter = at(t, FILTER)
+  const query = t >= 48.0 ? 'Redis' : ''
+  const focus = at(t, FOCUS), open = at(t, OPEN)
+  const all = TURNS
+  const matches = x => [x.prompt, x.sum, ...(x.files || []).map(f => f[1])].some(s => s.includes(query))
+  const shown = all.filter(x => (!filter || x.kind === filter) && (!query || matches(x)))
+  const isTree = !filter && !query
+  const done = x => !x.rew && t >= 15.0 + (x.i - 1) * 0.32
+  const live = all.filter(x => !x.rew)
+  const busy = t >= 14.3 && t < 18.4
+  const pending = live.filter(x => !done(x)).length
+
+  let h = `<div class="close">✕</div><div class="hdr"><span class="t">✻ 对话索引</span><span class="dim">  8 轮 · 55m · 9 个文件 </span><span style="color:var(--add)">+338</span><span style="color:var(--del)"> −63</span></div>`
+  if (busy) h += `<div class="dim it">◌ 正在用 haiku 总结 ${8 - pending + (pending ? 1 : 0)}–8 / 8 轮…</div>`
+  h += '<div class="tabs">' + KINDS.map(([k, lab, c], n) => {
+    const count = k ? all.filter(x => x.kind === k).length : all.length
+    const on = filter === k
+    return `<span class="tab ${on ? 'on' : ''}"><span class="k">${n + 1}:</span> <span class="lab" style="color:var(--${c});${on ? 'background:var(--' + c + ')' : ''}">${lab} ${count}</span></span>`
+  }).join('') + (query ? `<span class="chip">“${query}” ${shown.length} 条 ✕</span>` : '') + '</div>'
+  h += '<div class="hr"></div>'
+
+  for (const x of shown) {
+    const idx = all.indexOf(x), next = all[idx + 1]
+    let g1, g2
+    if (!isTree) { g1 = x.rew ? '○' : '●'; g2 = ' ' }
+    else if (x.rew) { g1 = '│○'; g2 = next && next.rew ? '││' : '│ ' }
+    else { g1 = '● '; g2 = next && next.rew ? '├╮' : (next ? '│ ' : '  ') }
+    const c = `var(--${x.kind})`
+    const lab = KINDS.find(k => k[0] === x.kind)[1]
+    const fs = x.files || []
+    const add = fs.reduce((a, f) => a + f[2], 0), del = fs.reduce((a, f) => a + f[3], 0)
+    const meta = x.rew ? `${UNDO} 已回退` : fs.length ? `${fs.length} 文件 +${add} −${del}` : ''
+    const isDone = done(x)
+    const sum = isDone ? x.sum : x.rule
+    h += `<div class="r ${x.rew ? 'rew' : ''} ${focus === x.i ? 'focus' : ''}" id="r${x.i}">`
+    h += `<div class="l1"><span class="g" style="color:${c}">${g1}</span><span class="idx" style="color:${c}">${String(x.i).padStart(2, '0')}</span><span class="kind" style="color:${c}">${lab}</span><span class="p">${esc(x.prompt)}</span><span class="tm">${x.time}</span></div>`
+    h += `<div class="l2"><span class="g">${g2}</span><span class="arrow">${ARROW}</span><span class="sum ${isDone ? '' : 'rule'}">${esc(sum)}</span><span class="meta">${meta}</span></div>`
+    h += '</div>'
+    if (open === x.i) {
+      h += '<div class="det">'
+      if (x.tools) h += `<div>工具  <span class="v">${x.tools}</span></div>`
+      if (x.think) h += `<div>思考  ${x.think} 字</div>`
+      for (const [op, p, a, d] of fs) h += `<div class="f"><span class="${op}">${op}</span><span class="path">${p}</span><span style="color:var(--add)">+${a}</span>${d ? `<span style="color:var(--del)">&nbsp;−${d}</span>` : ''}</div>`
+      h += '</div>'
+    }
+  }
+  h += '<div class="hr"></div>'
+  h += `<div class="foot">${t < 46.2 ? 'Tab 选择 · Enter 跳到原位置 · 1-5 筛选 · Esc 回到输入框' : '点击某一轮跳到原位置 · /trail 关键词 可搜索'}</div>`
+  return h
+}
+
+function render(t) {
+  T = t
+  // 窗口出现
+  const w = easeOut(seg(t, 0.15, 1.3))
+  const win = document.getElementById('win')
+  win.style.opacity = w
+  win.style.transform = `scale(${0.955 + 0.045 * w}) translateY(${(1 - w) * 24}px)`
+
+  // 面板
+  const isOpen = t >= 13.5
+  pane.style.display = isOpen ? 'block' : 'none'
+  pane.style.transform = `translateX(${(1 - easeOut(seg(t, 13.5, 14.1))) * 820}px)`
+  pane.style.borderLeftColor = t >= 14.1 && t < 46.2 ? '#7ea6c9' : '#4a4a4e'
+  content.style.right = isOpen ? '800px' : '0px'
+  document.getElementById('cmd1').innerHTML = t >= 13.3 ? cmdLines('') : ''
+  document.getElementById('cmd2').innerHTML = t >= 48.0 ? cmdLines('Redis') : ''
+  if (isOpen) {
+    const html = paneHTML(t)
+    if (html !== lastPaneKey) { pane.innerHTML = html; lastPaneKey = html }
+  }
+
+  // 滚动和落点高亮
+  content.style.transform = `translateY(${-scrollAt(t)}px)`
+  for (const [n, s] of [[2, 28.1], [7, 35.1]]) {
+    const g = document.querySelector(`#p${n} .glow`)
+    const k = seg(t, s, s + 1.8)
+    g.style.opacity = k > 0 && k < 1 ? (k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85) : 0
+  }
+
+  // 输入框
+  let typed = ''
+  if (t >= 11.0 && t < 12.6) typed = '/trail'.slice(0, typedCount(t, 11.0, 6, .13))
+  if (t >= 46.6 && t < 48.0) typed = '/trail Redis'.slice(0, typedCount(t, 46.6, 12, .1))
+  document.getElementById('typed').textContent = typed
+  const paneFocused = t >= 14.1 && t < 46.2
+  const blink = (typed && true) || Math.floor(t * 1.8) % 2 === 0
+  document.getElementById('caret').style.visibility = !paneFocused && blink && t > 1.3 ? 'visible' : 'hidden'
+  const sug = document.getElementById('suggest')
+  if (typed.startsWith('/')) {
+    sug.style.display = 'block'
+    sug.innerHTML = `<div class="s on"><span>/trail</span><span>对话索引：按轮次浏览、筛选、搜索当前会话 (trail)</span></div>` +
+      (typed.length <= 3 ? `<div class="s dim"><span>/todos</span><span>List current todo items</span></div>` : '')
+  } else sug.style.display = 'none'
+
+  // 字幕
+  const cap = document.getElementById('caption')
+  const c = CAPTIONS.find(([a, b]) => t >= a && t < b)
+  if (c) {
+    cap.innerHTML = c[2]
+    cap.style.opacity = Math.min(seg(t, c[0], c[0] + 0.3), 1 - seg(t, c[1] - 0.3, c[1]))
+  } else cap.style.opacity = 0
+
+  // 按键
+  document.getElementById('keys').innerHTML = KEYS.filter(([a, b]) => t >= a && t < b).map(([a, b, f]) => {
+    const o = Math.min(seg(t, a, a + 0.08), 1 - seg(t, b - 0.15, b))
+    const s = 0.9 + 0.1 * easeOut(seg(t, a, a + 0.12))
+    return `<div class="key" style="opacity:${o};transform:scale(${s})">${f() || '&nbsp;'}</div>`
+  }).join('')
+
+  // 回退分支的标注
+  const co = document.getElementById('callout')
+  if (t >= 40.2 && t < 46.0) {
+    const a = document.getElementById('r5'), b = document.getElementById('r6')
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect()
+    co.style.display = 'block'
+    co.style.left = ra.left - 8 + 'px'; co.style.top = ra.top - 3 + 'px'
+    co.style.width = ra.width + 16 + 'px'; co.style.height = rb.bottom - ra.top + 6 + 'px'
+    co.style.opacity = Math.min(seg(t, 40.2, 40.5), 1 - seg(t, 45.7, 46.0))
+  } else co.style.display = 'none'
+
+  // 结尾
+  const end = document.getElementById('end')
+  end.style.opacity = easeOut(seg(t, 52.0, 53.0))
+  end.style.transform = `scale(${1.03 - 0.03 * easeOut(seg(t, 52.0, 53.2))})`
+}
+window.render = render
+window.DURATION = 60
+render(Number(new URLSearchParams(location.search).get('t') || 0))
+</script>
+</body>
+</html>

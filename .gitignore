@@ -1,0 +1,9 @@
+# go build 的产物
+/trail
+/dist/
+
+# 演示视频的中间文件（render.mjs 生成）
+/docs/demo-video/preview/
+/docs/demo-video/fonts.css
+
+/docs/demo-video/*.mp4

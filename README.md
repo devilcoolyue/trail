@@ -1,0 +1,162 @@
+# trail · AI CLI 对话索引
+
+给 Claude Code 和 Codex 的对话做一个索引面板：每一轮列出提问和一句话总结（由 haiku 生成），
+可以按方案、改动、提问、排错筛选，也可以搜索。选中某一轮，终端会跳回这一轮在对话里的原始位置。
+
+分成两部分：
+
+| | Claude Code | Codex |
+|---|---|---|
+| 形式 | 原生插件，`claude-plugin/` | 独立终端面板 `trail`（Go） |
+| 打开方式 | 输入 `/trail [搜索词]` | tmux 快捷键弹出 |
+| 跳转 | Claude Code 自己把对话滚到那一轮 | tmux copy-mode 搜索提问文字 |
+| 总结 | 插件里调用 haiku | 调用本机的 `claude -p --model haiku` |
+
+运行环境：先支持 macOS，Linux 也能用。
+
+- Claude Code 插件：Claude Code 2.1.275 及以上可以一步安装；已在 2.1.312 上测试。
+- Codex 面板：tmux 3.2 及以上（需要 `display-popup`）；已在 Codex 0.165 上测试。
+  自己编译需要 Go 1.24 及以上。
+
+## Claude Code 插件
+
+### 安装
+
+在 Claude Code 里输入：
+
+```
+/plugin install trail --marketplace devilcoolyue/trail
+```
+
+也可以在终端里分两步：
+
+```bash
+claude plugin marketplace add devilcoolyue/trail
+claude plugin install trail@trail
+```
+
+### 本地开发
+
+```bash
+# 只对这一次启动生效
+claude --plugin-dir /path/to/trail/claude-plugin
+```
+
+改了代码以后在 Claude Code 里执行 `/reload-plugins` 就能生效。
+
+### 使用
+
+- `/trail` 打开面板。终端宽度至少 110 列时，面板停靠在对话右侧，否则显示在输入框上方。
+- `/trail 关键词` 打开面板并搜索。
+- 点击某一轮，或者用 Tab 选中后按 Enter，对话会滚到这一轮的提问处，这一轮也会展开显示用了哪些工具、改了哪些文件。
+- `1`–`5` 按类型筛选；`Esc` 回到输入框。
+- 面板开着的时候，每轮对话结束后索引会自动刷新，并总结新的一轮。
+- 回退掉的分支（Esc Esc 或编辑后重发）显示为灰色加删除线，这些轮次已不在当前对话里，无法跳转。
+- 斜杠命令里交给模型处理的（`/goal …`、自定义命令、技能）也算一轮，显示为 `/命令 参数`；`/clear`、`/compact` 这类不算。
+
+跳转需要 Claude Code 使用全屏界面（新版本默认就是，在 tmux 里也一样）。
+
+压缩过的会话：同一次运行里压缩（`/compact` 或自动压缩）之后，前面的轮次照样能跳。但用 `--resume` / `--continue`
+恢复的会话，Claude Code 只显示最后一次压缩之后的内容，`ctrl+o` 也只能看到压缩摘要，所以压缩前的轮次跳不过去。
+这时按回车会提示原因，面板里照样展开这一轮的详情（提问、总结、工具、改动的文件）。
+
+长会话的记录文件常有几十 MB，超过插件一次读文件的上限（4 MiB），这时插件改用 `cat` 流式读取。
+
+### 设置
+
+在 `/config` 里可以把「每轮总结」改为 `off`，这样只用规则提取，不调用模型。
+总结结果按会话缓存，同一轮只总结一次。
+
+## Codex 面板（也能浏览 Claude Code 会话）
+
+### 安装
+
+从 [Releases](https://github.com/devilcoolyue/trail/releases) 下载对应系统的压缩包，解压后把 `trail` 放到 `PATH` 里的目录，比如：
+
+```bash
+tar xzf trail_v0.1.0_darwin_arm64.tar.gz   # Intel Mac 用 darwin_amd64
+mv trail /usr/local/bin/
+# 浏览器下载的文件，macOS 第一次运行可能会拦截，用下面这行解除
+xattr -d com.apple.quarantine /usr/local/bin/trail
+```
+
+或者用 Go 安装、自己编译：
+
+```bash
+go install github.com/devilcoolyue/trail@latest
+# 或者
+git clone https://github.com/devilcoolyue/trail && cd trail && go build -o trail .
+```
+
+### 让 Codex 不进全屏界面（跳转需要）
+
+Codex 默认使用全屏界面，对话内容不会进入 tmux 的历史记录，tmux 也就搜不到。在 `~/.codex/config.toml` 里加上：
+
+```toml
+[tui]
+alternate_screen = "never"
+```
+
+或者每次用 `codex --no-alt-screen` 启动。没有设置时，在面板里按回车会提示这一步，不会跳转。
+
+### 绑定 tmux 快捷键
+
+`~/.tmux.conf`：
+
+```tmux
+# prefix + t 弹出索引面板，盖在 Codex 上方
+bind-key t display-popup -E -w 92% -h 88% trail
+```
+
+如果弹窗提示找不到 `trail`，把它换成完整路径（`which trail` 可以查到）。
+如果你的 tmux 没有设置 prefix 键，可以改成不需要 prefix 的按键，比如 `bind-key -n F2 display-popup ...`。
+
+在运行 Codex 的 tmux pane 里按快捷键，面板会自动选中这个 pane 里正在进行的会话（标着「● 当前终端」）。
+选中一轮按回车，弹窗关闭，下面的 pane 进入 copy-mode，那一轮的提问停在屏幕顶部；按 `q` 退出 copy-mode。
+
+`codex exec` 这类一次性的非交互调用（比如其他程序用它生成标题）不会列出来；Claude Code 的 `claude -p` 等 SDK 调用中，
+只有一轮、也没用工具的会话同样不列。
+
+其他会话可以按 `s` 浏览（Codex 和 Claude Code 混在一起，按时间分组），但不能跳转。
+对这些会话按回车，会提示用 `codex resume <id>` 或 `claude --resume <id>` 恢复。
+
+### 按键
+
+| 按键 | 作用 |
+|---|---|
+| `↑↓` / `jk` / 鼠标滚轮 | 选择一轮对话 |
+| `⏎` / 再次点击已选中项 | 跳到终端原位置 |
+| `/` | 搜索提问、结论、文件路径 |
+| `1-5` / `←→` | 按类型筛选：全部 / 方案 / 改动 / 提问 / 排错 |
+| `space` | 展开或折叠思考过程 |
+| `p` | 标记为关键节点（★） |
+| `tab` | 在索引和详情之间切换焦点 |
+| `s` | 会话列表与概览 |
+| `[` `]` | 切换到上一个 / 下一个会话 |
+| `q` / `esc` | 退出 |
+
+### 参数和环境变量
+
+- `-n 40`：最多读取最近几个会话（默认 40）
+- `--demo`：使用内置的演示数据
+- `TRAIL_SUMMARIES=off`：不调用模型总结。找不到 `claude` 命令时也会自动关闭。
+- 总结结果缓存在 `~/Library/Caches/trail/summaries.json`（macOS）或 `~/.cache/trail/summaries.json`（Linux）。
+
+### 演示
+
+`./demo-tmux.sh` 会在一个独立的 tmux 里放一段模拟的对话历史，按 `Ctrl-b t` 打开演示面板，可以体验跳转。
+
+## 代码结构
+
+- `claude-plugin/`：Claude Code 插件
+  - `hooks/register.tsx`：`/trail` 命令、面板绘制、跳转、每轮结束后刷新
+  - `hooks/transcript.ts`：解析会话记录（.jsonl），区分当前分支和回退掉的分支
+  - `hooks/summarize.ts`：haiku 总结的提示词和结果解析
+  - `hooks/jump.ts`：跳转失败时给用户看的说明
+  - `tests/`：`claude plugin test claude-plugin` 运行
+- Go 面板
+  - `codex.go` / `claude.go`：解析两种会话记录
+  - `sessions.go`：查找最近的会话，识别 tmux pane 里正在运行的会话
+  - `summarize.go`：调用 `claude -p --model haiku` 总结并缓存
+  - `ui.go`：界面；`jump.go`：tmux 跳转；`demo.go`：演示数据
+  - `go test ./...` 运行解析器测试；`TRAIL_REAL_CODEX=<目录>` 或 `TRAIL_REAL_CLAUDE=<目录> go test -run TestDumpReal -v` 打印一批真实会话的解析结果
