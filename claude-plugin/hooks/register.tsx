@@ -125,6 +125,12 @@ async function refresh($: $): Promise<string | undefined> {
 
 let isSummarizing = false
 
+// 焦点所在的一行：画的时候对调颜色，列表也要滚到能看见它
+async function noteFocus($: $, element: string) {
+  await update($, focusAtom, () => element)
+  await update($, revealAtom, () => element)
+}
+
 // 后台的刷新和总结出错时不打扰对话，只记到调试日志
 function logError($: $, err: unknown) {
   $.ui.log(`trail: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
@@ -329,10 +335,7 @@ export const register: Register = (on, options) => {
   // 记下焦点在哪一行：这一行要事先对调颜色，引擎反色后才是想要的样子（见 seg）
   on('ui.focus', async ($, e, next) => {
     const result = await next(e)
-    if (e.requestId === PANE && !result.deny) {
-      await update($, focusAtom, () => e.element ?? '')
-      await update($, revealAtom, () => e.element ?? '')
-    }
+    if (e.requestId === PANE && !result.deny) await noteFocus($, e.element ?? '')
     return result
   })
 
@@ -456,8 +459,11 @@ export const register: Register = (on, options) => {
         deny = String(err)
       }
       if (deny) $.ui.toast(jumpFailure(t, deny))
-      // 鼠标点击不会移动焦点；挪过来，之后按 ↑↓ 从这一轮接着走
-      await $.ui.focus({ requestId: PANE, key: `t:${t.id}` }).catch(() => undefined)
+      // 鼠标点击不会移动焦点；挪过来，之后按 ↑↓ 从这一轮接着走。
+      // 插件自己的 $.ui.focus 不经过上面的 ui.focus 钩子（2.1.312 实测），要自己记下，
+      // 否则对调颜色的还是旧的一行，鼠标一移开，新旧两行都成了色块
+      const moved = await $.ui.focus({ requestId: PANE, key: `t:${t.id}` }).catch(() => ({ deny: 'error' }))
+      if (!moved.deny) await noteFocus($, `t:${t.id}`)
     }
 
     // 非全屏时面板在输入框上方：收不到点击，也滚不动对话，Tab 移到哪一行插件也不知道。
