@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- trail 演示视频（Codex 版）：macOS 桌面 + 终端里的 trail codex。render(t) 按时间 t（秒）画出那一帧，render.mjs 逐帧截图并配音。 -->
+<link rel="stylesheet" href="fonts.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+  :root {
+    --mono: JBM, JBMx, Sym2, Sym2b, Sym, 'Noto Sans Mono CJK SC', monospace;
+    --ui: Inter, 'Noto Sans CJK SC', sans-serif;
+    --row: 21px;
+    /* trail 面板（ui.go）的颜色 */
+    --text: #E6EDF3; --sub: #9DA7B3; --dim: #5C6570; --line: #30363D; --sel: #1E2632; --hover: #3A3A3A;
+    --accent: #F0A97A; --dark: #0D1117; --add: #3FB950; --del: #F85149; --live: #3FB950; --codex: #10A37F;
+    --plan: #B392F0; --change: #56D364; --ask: #79C0FF; --debug: #FFA657;
+  }
+  #desk {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse 60% 55% at 18% 28%, rgba(40,190,150,.75), transparent 70%),
+      radial-gradient(ellipse 55% 60% at 85% 18%, rgba(90,110,255,.85), transparent 70%),
+      radial-gradient(ellipse 60% 50% at 62% 95%, rgba(240,140,90,.7), transparent 70%),
+      linear-gradient(135deg, #0f2a3a, #1c1f4a 50%, #0f2a4a);
+  }
+  #menubar {
+    position: absolute; left: 0; right: 0; top: 0; height: 30px;
+    background: rgba(20, 30, 50, .35); backdrop-filter: blur(20px);
+    display: flex; align-items: center; padding: 0 18px; gap: 22px;
+    font: 500 14px var(--ui); color: #fff;
+  }
+  #menubar b { font-weight: 700; }
+  #menubar .right { margin-left: auto; }
+  #dock {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    height: 74px; padding: 8px 10px; display: flex; gap: 10px; align-items: center;
+    background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.25); border-radius: 22px;
+  }
+  .icon { width: 56px; height: 56px; border-radius: 13px; position: relative; box-shadow: 0 2px 6px rgba(0,0,0,.25); overflow: hidden; }
+  .slot { position: relative; }
+  .dot { position: absolute; bottom: -7px; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 2px; background: rgba(255,255,255,.85); }
+  #win {
+    position: absolute; left: 100px; top: 54px; width: 1720px; height: 858px;
+    border-radius: 12px; overflow: hidden; background: rgba(20,20,22,.98);
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.12);
+  }
+  #titlebar {
+    height: 30px; background: linear-gradient(#3a3a3c, #323234); border-bottom: 1px solid #1c1c1e;
+    display: flex; align-items: center; justify-content: center; position: relative;
+    font: 500 13px var(--ui); color: #c8c8c8;
+  }
+  .lights { position: absolute; left: 14px; top: 9px; display: flex; gap: 8px; }
+  .lights i { width: 12px; height: 12px; border-radius: 6px; display: block; }
+  #term { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; font: 15px/var(--row) var(--mono); color: #e6e6e6; font-variant-ligatures: none; font-feature-settings: 'calt' 0, 'liga' 0; }
+  #view { position: absolute; left: 0; top: 0; right: 0; bottom: 92px; overflow: hidden; }
+  #content { position: absolute; left: 0; top: 0; right: 0; padding: 8px 22px; }
+  .ln { min-height: var(--row); white-space: pre; }
+  .d { color: #8b8b8b; }
+  .b { font-weight: 700; }
+  .user { background: #2b2b2e; margin: 10px -22px 6px; padding: 2px 22px; position: relative; }
+  .user .car { color: #9a9a9a; }
+  .glow { position: absolute; inset: 0; box-shadow: inset 0 0 0 2px var(--accent); background: rgba(240,169,122,.16); opacity: 0; }
+  .bul { color: #8b8b8b; }
+  .ok { color: #56d364; }
+  .er { color: #f85149; }
+  .cd { color: #e6b673; }
+  .banner { display: inline-block; border: 1px solid #555; border-radius: 6px; padding: 6px 14px; margin: 4px 0 6px; line-height: 21px; }
+  #bottom { position: absolute; left: 0; right: 0; bottom: 0; height: 92px; padding: 0 22px; }
+  #compose { margin-top: 6px; height: 34px; background: #2b2b2e; margin-left: -22px; margin-right: -22px; padding: 0 22px; display: flex; align-items: center; gap: 1ch; }
+  #compose .ph { color: #6b6b6b; }
+  #caret { display: inline-block; width: 9px; height: 19px; background: #e6e6e6; vertical-align: -4px; }
+  #cfoot { color: #7b7b7b; font-size: 14px; margin-top: 4px; white-space: pre; }
+  #tstat { position: absolute; left: 0; right: 0; bottom: 0; height: 21px; padding: 0 22px; color: #808080; text-align: right; }
+  /* tmux copy-mode 位置 */
+  #pos { position: absolute; right: 22px; top: 8px; background: #d7af00; color: #111; padding: 0 6px; display: none; }
+  #cursor { position: absolute; width: 9px; height: 21px; background: #d7af00; display: none; }
+  /* trail 弹窗（tmux display-popup） */
+  #popup {
+    position: absolute; left: 4%; top: 5%; width: 92%; height: 86%; background: #141416;
+    border: 1px solid #6b6b6b; padding: 6px 14px; display: none; font: 15px/var(--row) var(--mono); color: var(--text);
+  }
+  .hdr { display: flex; align-items: center; gap: 1.2ch; white-space: nowrap; }
+  .chip { background: var(--accent); color: var(--dark); font-weight: 700; padding: 0 1ch; }
+  .hdr .r { margin-left: auto; color: var(--dim); }
+  .tabs { display: flex; gap: 2.4ch; margin-top: 2px; white-space: nowrap; }
+  .tabs .on { color: var(--dark) !important; font-weight: 700; padding: 0 1ch; }
+  .tabs .r { margin-left: auto; color: var(--dim); }
+  .boxes { display: flex; gap: 1ch; margin-top: 18px; height: calc(100% - 92px); }
+  .box { border: 1px solid var(--line); border-radius: 8px; position: relative; padding: 12px 0 0; }
+  .box.f { border-color: var(--dim); }
+  .box .ttl { position: absolute; top: -11px; left: 12px; background: #141416; padding: 0 .6ch; color: var(--sub); font-weight: 700; }
+  .box.f .ttl { color: var(--accent); }
+  .box .inf { position: absolute; top: -11px; right: 12px; background: #141416; padding: 0 .6ch; color: var(--dim); }
+  #list { width: 46%; }
+  #detail { flex: 1; padding: 12px 16px 0; }
+  .row { padding: 0 1ch 0 0; }
+  .row .a, .row .b2 { display: flex; white-space: nowrap; height: var(--row); }
+  .row .bar { width: 1ch; color: var(--accent); flex: none; }
+  .row .dt { width: 2.4ch; flex: none; }
+  .row .ix { width: 3ch; color: var(--dim); flex: none; }
+  .row .kd { font-weight: 700; margin-right: 1ch; flex: none; }
+  .row .pr { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .row .tm { color: var(--dim); margin-left: 2ch; flex: none; }
+  .row .g2 { width: 2.4ch; color: var(--line); flex: none; }
+  .row .sm { flex: 1; color: var(--sub); overflow: hidden; text-overflow: ellipsis; padding-left: 4ch; }
+  .row .mt { margin-left: 2ch; flex: none; color: var(--dim); }
+  .row.sel { background: var(--sel); }
+  .row.sel .ix { color: var(--text); }
+  .row.sel .pr { font-weight: 700; }
+  .row.hov { background: var(--hover); }
+  #detail .h1 { display: flex; gap: 2ch; } #detail .h1 .n { color: var(--accent); font-weight: 700; }
+  #detail .rule { border-top: 1px solid var(--line); margin: 8px 0 14px; }
+  #detail .lab { font-weight: 700; margin-top: 10px; }
+  #detail .lab i { display: inline-block; width: 4px; height: 16px; margin-right: 1.2ch; vertical-align: -2px; }
+  #detail .tx { padding-left: 2ch; white-space: pre-wrap; }
+  #detail .mt { color: var(--dim); margin-top: 16px; }
+  #detail .mt b { color: var(--sub); font-weight: 400; }
+  #pfoot { position: absolute; left: 14px; right: 14px; bottom: 6px; display: flex; gap: 0; white-space: nowrap; color: var(--dim); }
+  #pfoot span { padding: 0 1.4ch; border-left: 1px solid var(--line); }
+  #pfoot span:first-child { border-left: none; padding-left: 0; }
+  #pfoot b { color: var(--accent); font-weight: 400; margin-right: .8ch; }
+  /* 叠加层 */
+  #caption {
+    position: absolute; left: 50%; top: 926px; transform: translateX(-50%);
+    padding: 10px 26px; border-radius: 26px; white-space: nowrap;
+    background: rgba(12,12,16,.78); border: 1px solid rgba(255,255,255,.14);
+    font: 600 26px var(--ui); color: #fff; letter-spacing: .5px;
+  }
+  #caption em { font-style: normal; color: #ffc9a3; font-family: var(--mono); font-weight: 700; }
+  #keys { position: absolute; right: 120px; top: 930px; display: flex; gap: 10px; }
+  .key {
+    min-width: 46px; height: 46px; padding: 0 14px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(#fafafa, #dcdce0); color: #222; font: 600 20px var(--mono);
+    box-shadow: 0 4px 0 #9a9aa2, 0 8px 18px rgba(0,0,0,.35);
+  }
+  #pointer { position: absolute; left: 0; top: 0; width: 26px; height: 34px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+  .card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; color: #fff; background: rgba(8,12,20,.66); backdrop-filter: blur(16px); }
+  .card .logo { font: 800 96px var(--ui); letter-spacing: -1px; display: flex; align-items: center; gap: 22px; }
+  .card .logo span { font-family: var(--mono); color: var(--accent); font-size: 80px; }
+  .card .tag { font: 500 34px var(--ui); color: #e8e8ee; }
+  .card .feats { display: flex; gap: 26px; margin-top: 10px; }
+  .card .feat { width: 300px; padding: 20px 22px; border-radius: 16px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); font: 500 21px/1.5 var(--ui); color: #ddd; }
+  .card .feat b { display: block; color: #fff; font-size: 24px; margin-bottom: 6px; }
+  .card .cmd { font: 600 23px/1.7 var(--mono); background: #18181b; border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 14px 28px; color: #e8e6e3; font-variant-ligatures: none; }
+  .card .cmd .p { color: var(--accent); }
+  .card .note { font: 500 20px var(--ui); color: #b8b8c4; }
+</style>
+</head>
+<body>
+<div id="desk"></div>
+<div id="menubar">
+  <svg width="15" height="18" viewBox="0 0 170 200"><path fill="#fff" d="M150 157c-6 14-9 20-17 32-11 17-27 38-46 38-17 0-21-11-44-11s-28 11-45 11C-21 227-37 208-48 191c-31-47-34-103-15-132 13-21 35-33 55-33 21 0 34 11 51 11 16 0 26-11 51-11 18 0 37 10 51 27-45 25-38 89 6 104z" transform="translate(48 -27)"/><path fill="#fff" d="M118 0c2 14-4 28-11 38-8 10-21 18-34 17-2-14 4-27 11-36 8-10 22-18 34-19z"/></svg>
+  <b>终端</b><span>Shell</span><span>编辑</span><span>显示</span><span>窗口</span><span>帮助</span>
+  <span class="right">10月31日 周五 15:20</span>
+</div>
+<div id="dock">
+  <div class="slot"><div class="icon" style="background:linear-gradient(90deg,#1d8cf8 50%,#c9e7ff 50%)"></div></div>
+  <div class="slot"><div class="icon" style="background:radial-gradient(circle,#3fb4ff,#1468e8)"></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#ffd84d 0 22%,#fffdf5 22%)"></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#4a4a4e,#1d1d20);border:1px solid #666"><div style="position:absolute;left:9px;top:8px;font:700 19px var(--mono);color:#e8e8e8">&gt;_</div></div><div class="dot"></div></div>
+  <div class="slot"><div class="icon" style="background:linear-gradient(#9ea3ab,#6c7179)"></div></div>
+</div>
+
+<div id="win">
+  <div id="titlebar"><div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><span id="wtitle">shop-api — zsh — 172×40</span></div>
+  <div id="term">
+    <div id="view"><div id="content"></div><div id="pos"></div><div id="cursor"></div></div>
+    <div id="bottom">
+      <div id="compose"><span>›</span><span id="typed"></span><span id="caret"></span><span class="ph" id="ph"></span></div>
+      <div id="cfoot"></div>
+    </div>
+    <div id="tstat"></div>
+    <div id="popup"></div>
+  </div>
+</div>
+
+<div id="caption"></div>
+<div id="keys"></div>
+<svg id="pointer" viewBox="0 0 26 34" style="display:none"><path d="M2 2v26l7-6.5 4.6 10 4.2-1.9-4.5-9.8h9.4z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>
+
+<div class="card" id="title" style="opacity:0">
+  <div class="logo"><span>◆</span>trail</div>
+  <div class="tag">Codex 对话索引</div>
+</div>
+<div class="card" id="end" style="opacity:0">
+  <div class="logo"><span>◆</span>trail</div>
+  <div class="tag">Codex 对话索引面板</div>
+  <div class="feats">
+    <div class="feat"><b>一眼看全</b>每一轮的提问和一句话总结</div>
+    <div class="feat"><b>回车跳回</b>终端直接停在那一轮的提问处</div>
+    <div class="feat"><b>不用配置</b>trail codex 自动准备好 tmux</div>
+  </div>
+  <div class="cmd"><span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/devilcoolyue/trail/main/install.sh | sh<br><span class="p">$</span> trail codex</div>
+  <div class="note">github.com/devilcoolyue/trail · 也支持 Claude Code</div>
+</div>
+
+<script>
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x))
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1)
+const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
+const easeOut = x => 1 - Math.pow(1 - x, 3)
+const at = (t, steps) => { let v = steps[0][1]; for (const [s, x] of steps) if (t >= s) v = x; return v }
+const typedCount = (t, start, n, step) => clamp(Math.floor((t - start) / step) + 1, 0, n)
+
+// ───────────── 演示数据（虚构的支付回调排查） ─────────────
+const TURNS = [
+  { i: 1, kind: 'debug', time: '10:02', prompt: '微信支付回调一直报验签失败，日志在 logs/pay.log', sum: '原因：RequestLogger 读取 body 后没有回填',
+    body: [['run', 'tail -n 40 logs/pay.log', 'verify signature failed: body mismatch (len 0)'], ['read', 'middleware/logger.go, pay/callback.go'],
+      ['say', '原因：RequestLogger 中间件读取了 body 没有回填，回调里拿到的是空 body，验签自然失败。']],
+    ans: '原因：RequestLogger 中间件读取了 body 没有回填，回调里拿到的是空 body，验签自然失败。', tools: 'shell×2 · read×2' },
+  { i: 2, kind: 'change', time: '10:09', prompt: '修一下', sum: '中间件读取后回填 body，补上回调测试', files: '2 文件 +18 −4',
+    body: [['edit', 'middleware/logger.go', '+12 −4'], ['diff', 21, [' func RequestLogger(next http.Handler) http.Handler {', '     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {', '-        body, _ := io.ReadAll(r.Body)', '-        log.Info("req", "body", string(body))', '+        body, err := io.ReadAll(r.Body)', '+        if err != nil {', '+            http.Error(w, "bad body", http.StatusBadRequest)', '+            return', '+        }', '+        r.Body = io.NopCloser(bytes.NewReader(body)) // 读完放回去，后面验签还要用', '+        log.Info("req", "body", truncate(body, 512))', '         next.ServeHTTP(w, r)']], ['edit', 'pay/callback_test.go', '+6'], ['run', 'go test ./pay/...', 'ok  shop-api/pay  0.412s'], ['say', '已回填 body，并补了一个回调验签的测试。']],
+    ans: '已回填 body，并补了一个回调验签的测试。', tools: 'apply_patch×2 · shell×1' },
+  { i: 3, kind: 'ask', time: '10:15', prompt: '回调为什么要先验签再解析？', sum: '防伪造通知；验签必须用原始 body',
+    body: [['say', '验签防的是伪造的支付通知。签名是对原始报文算的，先解析再序列化会改变字节，所以必须先用原始 body 验签。']],
+    ans: '验签防的是伪造的支付通知。签名是对原始报文算的，先解析再序列化会改变字节，所以必须先用原始 body 验签。', tools: '—' },
+  { i: 4, kind: 'plan', time: '10:21', prompt: '给支付回调加个幂等，微信会重复通知', sum: '以 transaction_id 去重，处理中直接回成功',
+    body: [['read', 'pay/callback.go, model/order.go'], ['say', '方案：以 transaction_id 作为幂等键写入 notify_log（唯一索引），'], ['say2', '已处理过的通知直接返回 SUCCESS；处理中的返回成功并由补偿任务兜底。']],
+    ans: '方案：以 transaction_id 作为幂等键写入 notify_log（唯一索引）。\n已处理过的通知直接返回 SUCCESS；处理中的返回成功并由补偿任务兜底。', tools: 'read×2' },
+  { i: 5, kind: 'change', time: '10:30', prompt: '按这个方案实现', sum: '新增 notify_log 表与去重逻辑', files: '3 文件 +86 −9',
+    body: [['edit', 'migrations/0007_notify_log.sql', '+14'], ['diff', 1, ['+CREATE TABLE notify_log (', '+    transaction_id text PRIMARY KEY,', '+    status         text NOT NULL,', '+    created_at     timestamptz NOT NULL DEFAULT now()', '+);']], ['edit', 'pay/notify.go', '+58 −6'], ['diff', 40, [' func (s *Service) HandleNotify(ctx context.Context, n *Notify) error {', '+    ok, err := s.log.Claim(ctx, n.TransactionID)', '+    if err != nil {', '+        return err', '+    }', '+    if !ok {', '+        return nil // 重复通知：已经处理过或正在处理', '+    }', '     order, err := s.orders.ByNo(ctx, n.OutTradeNo)', '-    if order.Paid {', '-        return nil', '-    }', '+    defer s.log.Done(ctx, n.TransactionID)']], ['edit', 'pay/callback.go', '+14 −3'], ['run', 'go test ./pay/... -count=5', 'ok  shop-api/pay  1.208s'], ['say', '已实现：重复通知只处理一次，测试跑 5 次全过。']],
+    ans: '已实现：重复通知只处理一次，测试跑 5 次全过。', tools: 'apply_patch×3 · shell×2' },
+  { i: 6, kind: 'debug', time: '10:44', prompt: '测试环境回调 404 了', sum: '路由前缀缺 /api，修正 nginx 配置', files: '1 文件 +1 −1',
+    body: [['run', 'curl -i https://test.shop.local/pay/notify', 'HTTP/1.1 404 Not Found'], ['run', 'grep -n "location" deploy/nginx.conf', '12:    location /pay/ {\n18:    location /api/ {'], ['edit', 'deploy/nginx.conf', '+1 −1'], ['diff', 12, ['-    location /pay/ {', '+    location /api/pay/ {', '         proxy_pass http://shop_api;']], ['say', 'nginx 少了 /api 前缀的转发，已修正；回调地址现在返回 200。']],
+    ans: 'nginx 少了 /api 前缀的转发，已修正；回调地址现在返回 200。', tools: 'shell×2 · apply_patch×1' },
+]
+const KINDS = [['', '全部', 'accent'], ['plan', '方案', 'plan'], ['change', '改动', 'change'], ['ask', '提问', 'ask'], ['debug', '排错', 'debug']]
+const ARROW = '<svg width="14" height="12" viewBox="0 0 14 12" style="margin-right:1ch;vertical-align:-1px"><path d="M2 0v7h9" stroke="#5C6570" stroke-width="1.5" fill="none"/><path d="M8.5 4l3 3-3 3" stroke="#5C6570" stroke-width="1.5" fill="none"/></svg>'
+const LABEL = { plan: '方案', change: '改动', ask: '提问', debug: '排错' }
+
+// Codex 里的对话（--no-alt-screen：都在终端历史里）
+const L = (cls, html) => `<div class="ln ${cls}">${html}</div>`
+function turnHTML(x) {
+  let h = `<div class="ln user" id="u${x.i}"><span class="car">› </span>${esc(x.prompt)}<div class="glow"></div></div>`
+  for (const [k, a, b] of x.body) {
+    if (k === 'run') h += L('', `<span class="bul">•</span> <span class="b">Ran</span> ${esc(a)}`) + b.split('\n').map((x, n) => L('d', `${n ? '    ' : '  └ '}${esc(x)}`)).join('')
+    if (k === 'diff') h += b.map((x, n) => L(x[0] === '+' ? 'ok' : x[0] === '-' ? 'er' : 'd', `    ${String(a + n).padStart(4)} ${esc(x)}`)).join('')
+    if (k === 'read') h += L('', `<span class="bul">•</span> <span class="b">Explored</span>`) + L('d', `  └ Read ${esc(a)}`)
+    if (k === 'edit') h += L('', `<span class="bul">•</span> <span class="b">Edited</span> ${esc(a)} <span class="ok">(${esc(b)})</span>`)
+    if (k === 'say') h += L('', `<span class="bul">•</span> ${esc(a)}`)
+    if (k === 'say2') h += L('', `  ${esc(a)}`)
+  }
+  return h
+}
+const SHELL = L('d', 'Last login: Fri Oct 31 15:19:02 on ttys002') + L('', '') + `<div class="ln" id="shellprompt"></div>`
+const BANNER = `<div class="banner"><span class="b">&gt;_ OpenAI Codex</span> <span class="d">(v0.165.0)</span><br><span class="d">model:</span>     gpt-5.5-codex high<br><span class="d">directory:</span> ~/code/shop-api</div>`
+
+// 配音：[开始时间, 文字]
+const NARRATION = [
+  [0.5, 'Codex 的长对话，也能用 trail 一眼看全。'],
+  [4.9, '用 trail codex 代替 codex 启动，照常对话。'],
+  [9.6, '按 Control 加右方括号，弹出对话索引：左边是每一轮的提问和总结，右边是详情。'],
+  [17.4, '鼠标移到哪一行，哪一行就高亮，方向键切换。'],
+  [22.2, '按回车，终端直接跳回这一轮的提问；按 q 回到 Codex 继续输入。'],
+  [29.0, '一行命令安装，不用自己配置 tmux。'],
+]
+const SUBTITLE = {
+  1: '用 <em>trail codex</em> 代替 <em>codex</em> 启动，照常对话',
+  2: '按 <em>Ctrl ]</em> 弹出对话索引：左边是每一轮的提问和总结，右边是详情',
+  4: '按回车，终端直接跳回这一轮的提问；按 <em>q</em> 回到 Codex 继续输入',
+}
+let DUR = []
+const subEnd = i => NARRATION[i][0] + (DUR[i] || NARRATION[i][1].length * 0.2) + 0.25
+
+const START = 6.5        // Codex 启动
+const OPEN = 10.4        // 弹出面板
+const ENTER = 22.6       // 回车跳转
+const QUIT = 26.4        // q 退出 copy-mode
+const KEYS = [
+  [5.1, 6.3, t => 'trail codex'.slice(0, typedCount(t, 5.1, 11, .09))], [6.3, 6.9, () => '⏎'],
+  [10.0, 10.9, () => 'Ctrl ]'],
+  [20.2, 20.7, () => '↑'], [20.8, 21.3, () => '↑'],
+  [ENTER, ENTER + 0.7, () => '⏎'], [QUIT, QUIT + 0.7, () => 'q'],
+]
+const SEL = [[0, 6], [20.2, 5], [20.8, 4]]
+const POINTER = [[17.4, 1500, 1000], [18.3, 640, 340], [18.9, 600, 300], [19.5, 620, 262], [20.1, 1400, 620]]
+
+const view = document.getElementById('view')
+const content = document.getElementById('content')
+let lastKey = ''
+
+// Codex 启动后，各轮按时间依次出现（像在快速翻过一段对话）
+const shownTurns = t => t < START ? 0 : clamp(Math.floor(seg(t, START + 0.4, 9.4) * 6) + 1, 1, 6)
+
+function contentHTML(t) {
+  if (t < START) return SHELL
+  let h = SHELL + L('', `<span class="d">~/code/shop-api %</span> trail codex`) + BANNER
+  for (let k = 0; k < shownTurns(t); k++) h += turnHTML(TURNS[k])
+  return h
+}
+
+function pointerAt(t) {
+  if (t < POINTER[0][0]) return null
+  let i = 0
+  while (i < POINTER.length - 1 && t >= POINTER[i + 1][0]) i++
+  const [t0, x0, y0] = POINTER[i], nx = POINTER[i + 1]
+  if (!nx) return [x0, y0]
+  const k = ease(seg(t, t0, nx[0]))
+  return [x0 + (nx[1] - x0) * k, y0 + (nx[2] - y0) * k]
+}
+
+function popupHTML(t, hover) {
+  const sel = at(t, SEL)
+  const s = TURNS.find(x => x.i === sel)
+  let h = `<div class="hdr"><span class="chip">◆ trail</span><span style="color:var(--codex)">◎ Codex</span><span style="color:var(--dim)">~/code/shop-api</span><span style="color:var(--dim)">⎇ fix/pay-callback</span><span class="b">微信支付回调一直报验签失败</span><span style="color:var(--live)">● 当前终端</span><span class="r">6 轮 · 42m · gpt-5.5-codex</span></div>`
+  h += '<div class="tabs">' + KINDS.map(([k, lab, c], n) => {
+    const count = k ? TURNS.filter(x => x.kind === k).length : TURNS.length
+    return n === 0 ? `<span class="on" style="background:var(--accent)">${n + 1} ${lab} ${count}</span>` : `<span style="color:var(--${c})">${n + 1} ${lab} ${count}</span>`
+  }).join('') + '<span class="r">/ 搜索提问、结论、文件…</span></div>'
+  h += '<div class="boxes"><div class="box f" id="list"><span class="ttl">对话索引</span><span class="inf">' + sel + '/6</span>'
+  for (const x of TURNS) {
+    const c = `var(--${x.kind})`
+    const cls = x.i === sel ? 'sel' : x.i === hover ? 'hov' : ''
+    h += `<div class="row ${cls}" id="t${x.i}"><div class="a"><span class="bar">${x.i === sel ? '▌' : ' '}</span><span class="dt" style="color:${c}">●</span><span class="ix">${String(x.i).padStart(2, '0')}</span><span class="kd" style="color:${c}">${LABEL[x.kind]}</span><span class="pr">${esc(x.prompt)}</span><span class="tm">${x.time}</span></div>`
+    h += `<div class="b2"><span class="bar">${x.i === sel ? '▌' : ' '}</span><span class="g2">${x.i < 6 ? '│' : ' '}</span><span class="sm">${ARROW}${esc(x.sum)}</span><span class="mt">${x.files ? x.files.replace(/(\+\d+)/, '<span style="color:var(--add)">$1</span>').replace(/(−\d+)/, '<span style="color:var(--del)">$1</span>') : ''}</span></div></div>`
+  }
+  h += '</div><div class="box" id="detail"><span class="ttl">详情</span>'
+  h += `<div class="h1"><span class="n">#${String(s.i).padStart(2, '0')}</span><span style="color:var(--${s.kind});font-weight:700">${LABEL[s.kind]}</span><span style="color:var(--dim)">${s.time} · 用时 ${3 + s.i}m</span></div><div class="rule"></div>`
+  h += `<div class="lab"><i style="background:var(--ask)"></i>你</div><div class="tx">${esc(s.prompt)}</div>`
+  h += `<div class="lab"><i style="background:var(--change)"></i>结论</div><div class="tx">${esc(s.ans)}</div>`
+  h += `<div class="mt">▸ 工具调用  <b>${s.tools}</b></div>`
+  if (s.files) h += `<div class="mt" style="margin-top:4px">▸ 改动文件  <b>${s.files}</b></div>`
+  h += '</div></div>'
+  const keys = [['↑↓', '选择'], ['⏎', '跳到原位置'], ['/', '搜索'], ['1-5', '筛选'], ['space', '展开'], ['p', '标记'], ['tab', '焦点'], ['s', '会话']]
+  h += `<div id="pfoot">${keys.map(([k, v]) => `<span><b>${k}</b>${v}</span>`).join('')}</div>`
+  return h
+}
+
+function render(t) {
+  const w = easeOut(seg(t, 0.0, 0.8))
+  const win = document.getElementById('win')
+  win.style.opacity = w
+  win.style.transform = `scale(${0.955 + 0.045 * w}) translateY(${(1 - w) * 24}px)`
+
+  // 开头的标题
+  const title = document.getElementById('title')
+  title.style.opacity = Math.min(easeOut(seg(t, 0.2, 0.9)), 1 - seg(t, 4.0, 4.7))
+
+  // 终端内容
+  const html = contentHTML(t)
+  if (html !== lastKey) { content.innerHTML = html; lastKey = html }
+  document.getElementById('wtitle').textContent = t < START ? 'shop-api — zsh — 172×40' : 'shop-api — tmux — 172×40'
+  const sp = document.getElementById('shellprompt')
+  if (sp) sp.innerHTML = t < START ? `<span class="d">~/code/shop-api %</span> ${'trail codex'.slice(0, t >= 5.1 ? typedCount(t, 5.1, 11, .09) : 0)}<span id="sc" style="display:inline-block;width:9px;height:19px;background:#e6e6e6;vertical-align:-4px"></span>` : ''
+
+  // 滚动：Codex 启动后跟着最新内容；回车后停在第 4 轮的提问；q 之后回到底部
+  const max = Math.max(0, content.scrollHeight - view.clientHeight)
+  let y = max
+  const u4 = document.getElementById('u4')
+  const target = u4 ? clamp(u4.offsetTop - 8, 0, max) : max
+  if (t >= ENTER + 0.15 && t < QUIT + 0.1) y = target
+  if (t >= QUIT + 0.1) y = target + (max - target) * ease(seg(t, QUIT + 0.1, QUIT + 0.6))
+  content.style.transform = `translateY(${-y}px)`
+
+  // copy-mode：右上角的位置、提问开头的光标、落点高亮
+  const inCopy = t >= ENTER + 0.15 && t < QUIT + 0.1
+  const pos = document.getElementById('pos'), cur = document.getElementById('cursor')
+  pos.style.display = cur.style.display = inCopy ? 'block' : 'none'
+  if (inCopy) {
+    pos.textContent = '[86/214]'
+    cur.style.left = '22px'; cur.style.top = (u4.offsetTop - y + 2) + 'px'
+  }
+  if (u4) {
+    const k = seg(t, ENTER + 0.3, ENTER + 2.6)
+    u4.querySelector('.glow').style.opacity = k > 0 && k < 1 ? (k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85) : 0
+  }
+
+  // 底部：shell 时没有；Codex 时是输入框、提示和 tmux 状态栏
+  const inCodex = t >= START
+  document.getElementById('bottom').style.visibility = inCodex ? 'visible' : 'hidden'
+  document.getElementById('ph').textContent = inCodex ? 'Ask Codex to do anything' : ''
+  document.getElementById('typed').textContent = ''
+  document.getElementById('cfoot').textContent = inCodex ? '⏎ send   ⇧⏎ newline   ctrl+t transcript   ctrl+c quit        gpt-5.5-codex high · 61% context left' : ''
+  document.getElementById('tstat').textContent = inCodex ? 'Ctrl-] 对话索引 · 滚轮翻历史' : ''
+  document.getElementById('caret').style.visibility = inCodex && !inCopy && Math.floor(t * 1.8) % 2 === 0 ? 'visible' : 'hidden'
+
+  // 弹窗
+  const popup = document.getElementById('popup')
+  const isOpen = t >= OPEN && t < ENTER + 0.15
+  popup.style.display = isOpen ? 'block' : 'none'
+  const ptr = document.getElementById('pointer')
+  const p = pointerAt(t)
+  let hover = null
+  if (isOpen) {
+    const k = easeOut(seg(t, OPEN, OPEN + 0.25))
+    popup.style.opacity = k
+    popup.style.transform = `scale(${0.98 + 0.02 * k})`
+    if (p) for (const r of popup.querySelectorAll('.row')) {
+      const b = r.getBoundingClientRect()
+      if (p[0] >= b.left && p[0] < b.right && p[1] >= b.top && p[1] < b.bottom) hover = Number(r.id.slice(1))
+    }
+    // 按了键就不留悬停的高亮
+    if (t >= 20.2) hover = null
+    const ph = popupHTML(t, hover)
+    if (ph !== popup.dataset.key) { popup.innerHTML = ph; popup.dataset.key = ph }
+  }
+  if (p && t < ENTER) {
+    ptr.style.display = 'block'
+    ptr.style.transform = `translate(${p[0]}px, ${p[1]}px)`
+    ptr.style.opacity = 1 - seg(t, 21.6, 22.1)
+  } else ptr.style.display = 'none'
+
+  // 字幕
+  const cap = document.getElementById('caption')
+  const i = NARRATION.findIndex(([a], n) => t >= a && t < subEnd(n))
+  if (i >= 0 && t < 28.6) {
+    cap.innerHTML = SUBTITLE[i] || NARRATION[i][1]
+    cap.style.opacity = Math.min(seg(t, NARRATION[i][0], NARRATION[i][0] + 0.25), 1 - seg(t, subEnd(i) - 0.25, subEnd(i)))
+  } else cap.style.opacity = 0
+
+  // 按键
+  document.getElementById('keys').innerHTML = KEYS.filter(([a, b]) => t >= a && t < b).map(([a, b, f]) => {
+    const o = Math.min(seg(t, a, a + 0.08), 1 - seg(t, b - 0.15, b))
+    const s = 0.9 + 0.1 * easeOut(seg(t, a, a + 0.12))
+    return `<div class="key" style="opacity:${o};transform:scale(${s})">${f(t) || '&nbsp;'}</div>`
+  }).join('')
+
+  // 结尾
+  const end = document.getElementById('end')
+  end.style.opacity = easeOut(seg(t, 28.6, 29.5))
+  end.style.transform = `scale(${1.03 - 0.03 * easeOut(seg(t, 28.6, 29.7))})`
+}
+window.render = render
+window.NARRATION = NARRATION
+window.setNarrationDurations = d => { DUR = d }
+window.DURATION = 33.5
+render(Number(new URLSearchParams(location.search).get('t') || 0))
+</script>
+</body>
+</html>

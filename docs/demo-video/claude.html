@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<!-- trail 演示动画：macOS 桌面 + Claude Code 终端。render(t) 按时间 t（秒）画出那一帧，render.mjs 逐帧截图合成视频。 -->
+<!-- trail 演示视频（Claude Code 版，配音见 narration.json）：macOS 桌面 + Claude Code 终端。render(t) 按时间 t（秒）画出那一帧，render.mjs 逐帧截图合成视频。 -->
 <link rel="stylesheet" href="fonts.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -119,8 +119,15 @@
   .r .meta { flex: none; color: var(--add); opacity: .8; margin-left: 2ch; }
   .r.rew .kind, .r.rew .idx, .r.rew .g, .r.rew .p, .r.rew .meta { color: #5c5c60 !important; }
   .r.rew .p { text-decoration: line-through; }
-  .r.focus { background: rgba(255,255,255,.09); box-shadow: inset 3px 0 0 var(--claude); }
+  .r.focus { background: #444; box-shadow: inset 4px 0 0 var(--kc); }
   .r.focus .p { font-weight: 700; }
+  .r.focus .sum { color: var(--text); }
+  .r.hover { background: #3a3a3a; }
+  .det .con { color: var(--text); }
+  .det .dl { display: flex; }
+  .det .lb { width: 6ch; flex: none; }
+  .foot .k { color: var(--claude); }
+  #pointer { position: absolute; left: 0; top: 0; width: 26px; height: 34px; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
   .det { padding-left: 7ch; color: var(--dim); }
   .det .v { color: var(--subtle); }
   .det .f { display: flex; }
@@ -198,19 +205,19 @@
   </div>
 </div>
 
-<div id="callout" style="display:none"><div class="tag">回退掉的分支</div></div>
+<svg id="pointer" viewBox="0 0 26 34" style="display:none"><path d="M2 2v26l7-6.5 4.6 10 4.2-1.9-4.5-9.8h9.4z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>
 <div id="caption" style="opacity:0"></div>
 <div id="keys"></div>
 <div id="end" style="opacity:0">
   <div class="logo"><span>✻</span>trail</div>
   <div class="tag">Claude Code 对话索引面板</div>
   <div class="feats">
-    <div class="feat"><b>一眼看全</b>每一轮的提问 + haiku 一句话总结，不再被思考链和 diff 淹没</div>
-    <div class="feat"><b>一键跳回</b>选中一轮按回车，对话滚回当时的位置</div>
-    <div class="feat"><b>筛选与搜索</b>方案 / 改动 / 提问 / 排错，或 /trail 关键词</div>
+    <div class="feat"><b>一眼看全</b>每一轮的提问和一句话总结</div>
+    <div class="feat"><b>一键跳回</b>点一下，对话滚回原位置</div>
+    <div class="feat"><b>筛选浏览</b>按类型筛选，↑↓ 看详情</div>
   </div>
   <div class="cmd"><span class="p">❯</span> /plugin install trail --marketplace devilcoolyue/trail</div>
-  <div class="note">也支持 Codex：在 tmux 里弹出 trail 面板，同样能跳回终端原位置</div>
+  <div class="note">github.com/devilcoolyue/trail · 也支持 Codex</div>
 </div>
 
 <script>
@@ -220,26 +227,26 @@ const UNDO = '<svg width="13" height="12" viewBox="0 0 13 12" style="vertical-al
 
 const TURNS = [
   { i: 1, kind: 'ask', time: '14:02', prompt: '先读一下 internal/order 目录，说说现在下单流程是怎么走的，有哪些地方可能重复扣库存？',
-    rule: '下单链路：handler.CreateOrder → service.PlaceOrder → stock.Deduct…', sum: '梳理下单链路，定位 3 处重复扣减风险',
+    rule: '下单链路：handler.CreateOrder → service.PlaceOrder → stock.Deduct…', con: ['下单链路：CreateOrder → PlaceOrder → Deduct → Insert → Publish。', '可能重复扣库存的 3 个地方：网关重试、用户双击、MQ 重投。'], sum: '梳理下单链路，定位 3 处重复扣减风险',
     tools: 'Read×6 · Grep×3', think: '1.2k' },
   { i: 2, kind: 'plan', time: '14:06', prompt: '给我设计一个幂等方案，要求网关重试、MQ 重投、用户双击都能扛住，先别写代码',
-    rule: '建议分三层：', sum: '三层幂等：业务唯一键 + Redis 预占 + DB 唯一索引兜底', tools: 'Read×2', think: '3.8k' },
+    rule: '建议分三层：', con: ['建议分三层：业务唯一键、Redis 预占、DB 唯一索引兜底。', '网关重试和用户双击挡在 Redis 预占，MQ 重投靠 event_id。'], sum: '三层幂等：业务唯一键 + Redis 预占 + DB 唯一索引兜底', tools: 'Read×2', think: '3.8k' },
   { i: 3, kind: 'ask', time: '14:11', prompt: 'Redis 挂了怎么办？会不会整个下单不可用',
-    rule: '不会整个不可用。', sum: 'Redis 故障时降级为仅 DB 唯一索引，不阻断下单' },
+    rule: '不会整个不可用。', con: ['不会整个不可用：Redis 出错时跳过预占，DB 唯一索引仍然兜底。'], sum: 'Redis 故障时降级为仅 DB 唯一索引，不阻断下单' },
   { i: 4, kind: 'change', time: '14:15', prompt: '按方案实现吧，先做 Redis 预占这层',
-    rule: '已完成 Redis 预占层。', sum: '新增 idem 包与中间件，接入 CreateOrder', files: [['A', 'idem/redis.go', 96, 0], ['A', 'idem/middleware.go', 52, 0], ['M', 'order/handler.go', 16, 12]], tools: 'Write×2 · Update×1 · Bash×2' },
+    rule: '已完成 Redis 预占层。', con: ['已完成 Redis 预占层：新增 internal/idem，CreateOrder 要求带 Idempotency-Key。'], sum: '新增 idem 包与中间件，接入 CreateOrder', files: [['A', 'idem/redis.go', 96, 0], ['A', 'idem/middleware.go', 52, 0], ['M', 'order/handler.go', 16, 12]], tools: 'Write×2 · Update×1 · Bash×2' },
   { i: 5, kind: 'change', time: '14:22', rew: true, prompt: 'DB 兜底用乐观锁 version 字段来做',
     rule: '已加 version 字段并在插入时校验。', sum: '' },
   { i: 6, kind: 'debug', time: '14:28', rew: true, prompt: '测试挂了：duplicate key 还是能插进来',
     rule: '乐观锁挡不住并发插入。', sum: '' },
   { i: 7, kind: 'change', time: '14:33', prompt: 'DB 兜底改用唯一索引 (user_id, idem_key)，冲突时查出已有订单返回',
-    rule: '唯一索引已加上。', sum: '唯一索引兜底 + 冲突回查，迁移脚本 0042', files: [['A', 'migrations/0042_order_idem.sql', 12, 0], ['M', 'order/repo.go', 38, 6]], tools: 'Write×1 · Update×2 · Bash×3', think: '0.9k' },
+    rule: '唯一索引已加上。', con: ['唯一索引已加上（迁移 0042），重复插入时查出已有订单返回。'], sum: '唯一索引兜底 + 冲突回查，迁移脚本 0042', files: [['A', 'migrations/0042_order_idem.sql', 12, 0], ['M', 'order/repo.go', 38, 6]], tools: 'Write×1 · Update×2 · Bash×3', think: '0.9k' },
   { i: 8, kind: 'plan', time: '14:40', prompt: 'MQ 消费侧怎么接？onPaid 里还有发券逻辑',
-    rule: '消费侧建议用 event_id 预占。', sum: '消费侧以 event_id 预占，发券拆为独立幂等步骤', think: '2.1k' },
+    rule: '消费侧建议用 event_id 预占。', con: ['消费侧以 event_id 预占，处理完标记 done；', '发券拆成独立的 coupon.Grant，失败单独重试。'], sum: '消费侧以 event_id 预占，发券拆为独立幂等步骤', think: '2.1k' },
   { i: 9, kind: 'change', time: '14:45', prompt: '实现消费侧，顺便把发券拆出来',
-    rule: '消费侧已接入幂等。', sum: 'onPaid 接入幂等，拆出 coupon.Grant', files: [['M', 'order/consumer.go', 64, 38], ['A', 'coupon/grant.go', 51, 0], ['M', 'order/service.go', 6, 6]] },
+    rule: '消费侧已接入幂等。', con: ['onPaid 接入幂等，发券拆成 coupon.Grant，通过任务队列异步执行。'], sum: 'onPaid 接入幂等，拆出 coupon.Grant', files: [['M', 'order/consumer.go', 64, 38], ['A', 'coupon/grant.go', 51, 0], ['M', 'order/service.go', 6, 6]] },
   { i: 10, kind: 'debug', time: '14:54', prompt: 'CI 上 TestOnPaid_Concurrent 偶发失败，帮我看下',
-    rule: '原因是测试之间共享了 Redis key 前缀。', sum: '测试共享 Redis key 前缀导致串扰，改为随机前缀', files: [['M', 'order/consumer_test.go', 3, 1]] },
+    rule: '原因是测试之间共享了 Redis key 前缀。', con: ['原因是测试之间共享了 Redis key 前缀，改成每个用例随机前缀后跑 50 次全过。'], sum: '测试共享 Redis key 前缀导致串扰，改为随机前缀', files: [['M', 'order/consumer_test.go', 3, 1]] },
 ]
 const KINDS = [['', '全部', 'claude'], ['plan', '方案', 'plan'], ['change', '改动', 'change'], ['ask', '提问', 'ask'], ['debug', '排错', 'debug']]
 
@@ -344,7 +351,7 @@ const TRANSCRIPT = [
   tool('Bash', 'go test -race -count=50 -run TestOnPaid_Concurrent ./internal/order/', 'ok  shop-api/internal/order  9.214s'),
   ans(['原因是测试之间共享了 Redis key 前缀，改成每个用例随机前缀后跑 50 次全过。']),
   worked('3m 33s'),
-  '<div id="cmd1"></div><div id="cmd2"></div>',
+  '<div id="cmd1"></div>',
 ].join('')
 
 document.getElementById('content').innerHTML = TRANSCRIPT
@@ -356,34 +363,34 @@ const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1)
 const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
 const easeOut = x => 1 - Math.pow(1 - x, 3)
 const at = (t, steps) => { let v = steps[0][1]; for (const [s, x] of steps) if (t >= s) v = x; return v }
-
-const CAPTIONS = [
-  [1.0, 8.4, '长对话里，之前定下的方案在哪？'],
-  [3.4, 10.4, '思考过程、工具调用、代码 diff 刷满整屏，只能一路往回翻'],
-  [10.6, 14.0, '输入 <em>/trail</em>'],
-  [14.2, 19.3, '每一轮列出你的提问，haiku 自动写一句话总结'],
-  [19.5, 24.8, '按 方案 / 改动 / 提问 / 排错 一键筛选'],
-  [25.0, 31.3, '选中一轮按回车，对话立刻滚回当时的位置'],
-  [31.5, 39.8, '这一轮用了哪些工具、改了哪些文件，展开就能看到'],
-  [40.0, 46.0, 'Esc Esc 回退掉的尝试也留在索引里，灰色标出'],
-  [46.2, 51.8, '<em>/trail 关键词</em> 直接搜索提问、总结和文件'],
-]
-// 文字被拆开的两条字幕：第二条出现时第一条已结束
-CAPTIONS[0][1] = 3.3
-
-const KEYS = [
-  [11.0, 12.5, () => '/trail'.slice(0, typedCount(T, 11.0, 6, .13))],
-  [12.6, 13.5, () => '⏎'], [19.8, 20.7, () => '2'], [21.8, 22.7, () => '3'], [23.8, 24.7, () => '1'],
-  [25.5, 25.95, () => 'Tab'], [26.0, 26.9, () => 'Tab'], [27.0, 27.9, () => '⏎'],
-  [31.8, 32.15, () => 'Tab'], [32.2, 32.55, () => 'Tab'], [32.6, 32.95, () => 'Tab'], [33.0, 33.35, () => 'Tab'], [33.4, 33.9, () => 'Tab'], [34.0, 34.9, () => '⏎'],
-  [46.2, 46.55, () => 'Esc'], [46.6, 47.9, () => '/trail Redis'.slice(0, typedCount(T, 46.6, 12, .1))], [48.0, 48.9, () => '⏎'],
-]
-let T = 0
 const typedCount = (t, start, n, step) => clamp(Math.floor((t - start) / step) + 1, 0, n)
 
-const FOCUS = [[0, null], [25.5, 1], [26.0, 2], [31.8, 3], [32.2, 4], [32.6, 5], [33.0, 6], [33.4, 7], [46.2, null]]
-const OPEN = [[0, null], [27.0, 2], [34.0, 7]]
-const FILTER = [[0, ''], [19.8, 'plan'], [21.8, 'change'], [23.8, '']]
+// 配音：[开始时间, 文字]。字幕和配音用同一份，render.mjs 按这里的时间把配音放进音轨
+const NARRATION = [
+  [0.5, 'Claude Code 的对话一长，想找回之前的方案，就得往上翻很久。'],
+  [6.4, '装上 trail 插件，输入斜杠 trail。'],
+  [9.9, '右边会列出每一轮的提问，和 Haiku 写的一句话总结。'],
+  [15.3, '用方向键或鼠标浏览，当前这一轮会展开结论和改动的文件。'],
+  [21.6, '点一下，左边的对话就跳回当时提问的位置。'],
+  [26.3, '还能按方案、改动、提问、排错来筛选。'],
+  [30.9, '在 Claude Code 里，一行命令就能安装。'],
+]
+// 字幕上显示的写法（配音里“斜杠 trail”在字幕上写成 /trail）
+const SUBTITLE = { 1: '装上 trail 插件，输入 <em>/trail</em>' }
+let DUR = []  // render.mjs 填入每句配音的长度；没有时按字数估
+const subEnd = i => NARRATION[i][0] + (DUR[i] || NARRATION[i][1].length * 0.2) + 0.25
+
+const KEYS = [
+  [6.8, 7.8, t => '/trail'.slice(0, typedCount(t, 6.8, 6, .12))], [7.9, 8.6, () => '⏎'],
+  [15.6, 16.2, () => '↑'], [16.3, 16.9, () => '↑'], [17.0, 17.6, () => '↑'],
+  [26.8, 27.6, () => '2'], [28.0, 28.8, () => '3'], [29.3, 30.1, () => '1'],
+]
+// 焦点（灰底那一轮）：打开时没有，↑ 从最后一轮往上走；点击第 2 轮后停在第 2 轮
+const FOCUS = [[0, null], [15.6, 10], [16.3, 9], [17.0, 8], [22.2, 2]]
+const FILTER = [[0, ''], [26.8, 'plan'], [28.0, 'change'], [29.3, '']]
+// 鼠标：[时间, x, y]（屏幕坐标），中间平滑移动；hover 按指针所在的行算
+const POINTER = [[18.4, 1520, 980], [19.3, 1440, 560], [20.2, 1400, 330], [21.2, 1340, 218], [22.0, 1336, 216]]
+const CLICK = 22.2
 
 const view = document.getElementById('view')
 const content = document.getElementById('content')
@@ -395,45 +402,50 @@ function targetOf(n) { return clamp(document.getElementById('p' + n).offsetTop -
 
 function scrollAt(t) {
   const bottom = maxScroll()
-  const hunt = bottom * 0.2
-  if (t < 2.6) return bottom
-  if (t < 8.6) {
+  const hunt = bottom * 0.25
+  if (t < 1.4) return bottom
+  if (t < 5.4) {
     // 像滚轮一样一下一下往上翻
-    const p = seg(t, 2.6, 8.6) * 9
+    const p = seg(t, 1.4, 5.4) * 7
     const k = Math.floor(p), f = p - k
-    const flick = (Math.min(k, 9) + easeOut(clamp(f / 0.55, 0, 1))) / 9
+    const flick = (Math.min(k, 7) + easeOut(clamp(f / 0.55, 0, 1))) / 7
     return bottom - (bottom - hunt) * clamp(flick, 0, 1)
   }
-  if (t < 10.4) return hunt + (bottom - hunt) * ease(seg(t, 8.6, 10.4))
-  if (t < 27.0) return bottom
-  const t2 = targetOf(2), t7 = targetOf(7)
-  if (t < 28.2) return bottom + (t2 - bottom) * ease(seg(t, 27.0, 28.2))
-  if (t < 34.0) return t2
-  if (t < 35.2) return t2 + (t7 - t2) * ease(seg(t, 34.0, 35.2))
-  if (t < 48.0) return t7
-  return t7 + (bottom - t7) * ease(seg(t, 48.0, 48.5))
+  if (t < 6.4) return hunt + (bottom - hunt) * ease(seg(t, 5.4, 6.4))
+  if (t < CLICK) return bottom
+  const t2 = targetOf(2)
+  return bottom + (t2 - bottom) * ease(seg(t, CLICK + 0.1, CLICK + 1.2))
 }
 
-function paneHTML(t) {
+function pointerAt(t) {
+  if (t < POINTER[0][0]) return null
+  let i = 0
+  while (i < POINTER.length - 1 && t >= POINTER[i + 1][0]) i++
+  const [t0, x0, y0] = POINTER[i]
+  const nx = POINTER[i + 1]
+  if (!nx) return [x0, y0]
+  const k = ease(seg(t, t0, nx[0]))
+  return [x0 + (nx[1] - x0) * k, y0 + (nx[2] - y0) * k]
+}
+
+function paneHTML(t, hover) {
   const filter = at(t, FILTER)
-  const query = t >= 48.0 ? 'Redis' : ''
-  const focus = at(t, FOCUS), open = at(t, OPEN)
+  const focus = at(t, FOCUS)
   const all = TURNS
-  const matches = x => [x.prompt, x.sum, ...(x.files || []).map(f => f[1])].some(s => s.includes(query))
-  const shown = all.filter(x => (!filter || x.kind === filter) && (!query || matches(x)))
-  const isTree = !filter && !query
-  const done = x => !x.rew && t >= 15.0 + (x.i - 1) * 0.32
+  const shown = all.filter(x => !filter || x.kind === filter)
+  const isTree = !filter
+  const done = x => !x.rew && t >= 10.2 + (x.i - 1) * 0.25
   const live = all.filter(x => !x.rew)
-  const busy = t >= 14.3 && t < 18.4
+  const busy = t >= 9.0 && t < 12.9
   const pending = live.filter(x => !done(x)).length
 
   let h = `<div class="close">✕</div><div class="hdr"><span class="t">✻ 对话索引</span><span class="dim">  8 轮 · 55m · 9 个文件 </span><span style="color:var(--add)">+338</span><span style="color:var(--del)"> −63</span></div>`
-  if (busy) h += `<div class="dim it">◌ 正在用 haiku 总结 ${8 - pending + (pending ? 1 : 0)}–8 / 8 轮…</div>`
+  h += busy ? `<div class="dim it">◌ 正在用 haiku 总结 ${8 - pending + (pending ? 1 : 0)}–8 / 8 轮…</div>` : ''
   h += '<div class="tabs">' + KINDS.map(([k, lab, c], n) => {
     const count = k ? all.filter(x => x.kind === k).length : all.length
     const on = filter === k
     return `<span class="tab ${on ? 'on' : ''}"><span class="k">${n + 1}:</span> <span class="lab" style="color:var(--${c});${on ? 'background:var(--' + c + ')' : ''}">${lab} ${count}</span></span>`
-  }).join('') + (query ? `<span class="chip">“${query}” ${shown.length} 条 ✕</span>` : '') + '</div>'
+  }).join('') + '</div>'
   h += '<div class="hr"></div>'
 
   for (const x of shown) {
@@ -449,100 +461,105 @@ function paneHTML(t) {
     const meta = x.rew ? `${UNDO} 已回退` : fs.length ? `${fs.length} 文件 +${add} −${del}` : ''
     const isDone = done(x)
     const sum = isDone ? x.sum : x.rule
-    h += `<div class="r ${x.rew ? 'rew' : ''} ${focus === x.i ? 'focus' : ''}" id="r${x.i}">`
+    const cls = focus === x.i ? 'focus' : hover === x.i ? 'hover' : ''
+    h += `<div class="r ${x.rew ? 'rew' : ''} ${cls}" id="r${x.i}" style="--kc:${c}">`
     h += `<div class="l1"><span class="g" style="color:${c}">${g1}</span><span class="idx" style="color:${c}">${String(x.i).padStart(2, '0')}</span><span class="kind" style="color:${c}">${lab}</span><span class="p">${esc(x.prompt)}</span><span class="tm">${x.time}</span></div>`
     h += `<div class="l2"><span class="g">${g2}</span><span class="arrow">${ARROW}</span><span class="sum ${isDone ? '' : 'rule'}">${esc(sum)}</span><span class="meta">${meta}</span></div>`
     h += '</div>'
-    if (open === x.i) {
+    if (focus === x.i) {
       h += '<div class="det">'
-      if (x.tools) h += `<div>工具  <span class="v">${x.tools}</span></div>`
-      if (x.think) h += `<div>思考  ${x.think} 字</div>`
+      ;(x.con || [x.rule]).forEach((l, k) => { h += `<div class="dl"><span class="lb">${k ? '' : '结论'}</span><span class="con">${esc(l)}</span></div>` })
+      if (x.tools) h += `<div class="dl"><span class="lb">工具</span><span class="v">${x.tools}</span></div>`
       for (const [op, p, a, d] of fs) h += `<div class="f"><span class="${op}">${op}</span><span class="path">${p}</span><span style="color:var(--add)">+${a}</span>${d ? `<span style="color:var(--del)">&nbsp;−${d}</span>` : ''}</div>`
       h += '</div>'
     }
   }
   h += '<div class="hr"></div>'
-  h += `<div class="foot">${t < 46.2 ? 'Tab 选择 · Enter 跳到原位置 · 1-5 筛选 · Esc 回到输入框' : '点击某一轮跳到原位置 · /trail 关键词 可搜索'}</div>`
+  const hints = [['↑↓', '选择'], ['⏎', '跳到原位置'], ['滚轮', '翻页'], ['1-5', '筛选'], ['Esc', '回到输入框']]
+  h += `<div class="foot">${hints.map(([k, v]) => `<span class="k">${k}</span> ${v}`).join('  ')}</div>`
   return h
 }
 
 function render(t) {
-  T = t
   // 窗口出现
-  const w = easeOut(seg(t, 0.15, 1.3))
+  const w = easeOut(seg(t, 0.0, 0.9))
   const win = document.getElementById('win')
   win.style.opacity = w
   win.style.transform = `scale(${0.955 + 0.045 * w}) translateY(${(1 - w) * 24}px)`
 
   // 面板
-  const isOpen = t >= 13.5
+  const isOpen = t >= 8.2
   pane.style.display = isOpen ? 'block' : 'none'
-  pane.style.transform = `translateX(${(1 - easeOut(seg(t, 13.5, 14.1))) * 820}px)`
-  pane.style.borderLeftColor = t >= 14.1 && t < 46.2 ? '#7ea6c9' : '#4a4a4e'
+  pane.style.transform = `translateX(${(1 - easeOut(seg(t, 8.2, 8.8))) * 820}px)`
   content.style.right = isOpen ? '800px' : '0px'
-  document.getElementById('cmd1').innerHTML = t >= 13.3 ? cmdLines('') : ''
-  document.getElementById('cmd2').innerHTML = t >= 48.0 ? cmdLines('Redis') : ''
+  document.getElementById('cmd1').innerHTML = t >= 8.0 ? cmdLines('') : ''
+
+  // 鼠标指针和悬停
+  const ptr = document.getElementById('pointer')
+  const pos = pointerAt(t)
+  let hover = null
+  if (pos && t < 25.5) {
+    ptr.style.display = 'block'
+    const press = t >= CLICK && t < CLICK + 0.18
+    ptr.style.transform = `translate(${pos[0]}px, ${pos[1]}px) scale(${press ? 0.86 : 1})`
+    ptr.style.opacity = 1 - seg(t, 25.0, 25.5)
+  } else ptr.style.display = 'none'
   if (isOpen) {
-    const html = paneHTML(t)
+    // 先画一遍拿到行的位置，再按指针位置决定悬停哪一行
+    if (pos && t < 25.5) {
+      for (const r of pane.querySelectorAll('.r')) {
+        const b = r.getBoundingClientRect()
+        if (pos[1] >= b.top && pos[1] < b.bottom && pos[0] >= b.left && pos[0] < b.right) hover = Number(r.id.slice(1))
+      }
+    }
+    const html = paneHTML(t, hover)
     if (html !== lastPaneKey) { pane.innerHTML = html; lastPaneKey = html }
   }
 
   // 滚动和落点高亮
   content.style.transform = `translateY(${-scrollAt(t)}px)`
-  for (const [n, s] of [[2, 28.1], [7, 35.1]]) {
-    const g = document.querySelector(`#p${n} .glow`)
-    const k = seg(t, s, s + 1.8)
-    g.style.opacity = k > 0 && k < 1 ? (k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85) : 0
-  }
+  const g = document.querySelector('#p2 .glow')
+  const k = seg(t, CLICK + 1.2, CLICK + 3.2)
+  g.style.opacity = k > 0 && k < 1 ? (k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85) : 0
 
   // 输入框
   let typed = ''
-  if (t >= 11.0 && t < 12.6) typed = '/trail'.slice(0, typedCount(t, 11.0, 6, .13))
-  if (t >= 46.6 && t < 48.0) typed = '/trail Redis'.slice(0, typedCount(t, 46.6, 12, .1))
+  if (t >= 6.8 && t < 7.9) typed = '/trail'.slice(0, typedCount(t, 6.8, 6, .12))
   document.getElementById('typed').textContent = typed
-  const paneFocused = t >= 14.1 && t < 46.2
+  const paneFocused = t >= 8.8
   const blink = (typed && true) || Math.floor(t * 1.8) % 2 === 0
-  document.getElementById('caret').style.visibility = !paneFocused && blink && t > 1.3 ? 'visible' : 'hidden'
+  document.getElementById('caret').style.visibility = !paneFocused && blink && t > 0.9 ? 'visible' : 'hidden'
   const sug = document.getElementById('suggest')
   if (typed.startsWith('/')) {
     sug.style.display = 'block'
-    sug.innerHTML = `<div class="s on"><span>/trail</span><span>对话索引：按轮次浏览、筛选、搜索当前会话 (trail)</span></div>` +
+    sug.innerHTML = `<div class="s on"><span>/trail</span><span>对话索引：按轮次浏览、筛选、搜索本会话，点击跳回原位置 (trail)</span></div>` +
       (typed.length <= 3 ? `<div class="s dim"><span>/todos</span><span>List current todo items</span></div>` : '')
   } else sug.style.display = 'none'
 
-  // 字幕
+  // 字幕（配音的文字）
   const cap = document.getElementById('caption')
-  const c = CAPTIONS.find(([a, b]) => t >= a && t < b)
-  if (c) {
-    cap.innerHTML = c[2]
-    cap.style.opacity = Math.min(seg(t, c[0], c[0] + 0.3), 1 - seg(t, c[1] - 0.3, c[1]))
+  const i = NARRATION.findIndex(([a], n) => t >= a && t < subEnd(n))
+  if (i >= 0 && t < 30.6) {
+    cap.innerHTML = SUBTITLE[i] || NARRATION[i][1]
+    cap.style.opacity = Math.min(seg(t, NARRATION[i][0], NARRATION[i][0] + 0.25), 1 - seg(t, subEnd(i) - 0.25, subEnd(i)))
   } else cap.style.opacity = 0
 
   // 按键
   document.getElementById('keys').innerHTML = KEYS.filter(([a, b]) => t >= a && t < b).map(([a, b, f]) => {
     const o = Math.min(seg(t, a, a + 0.08), 1 - seg(t, b - 0.15, b))
     const s = 0.9 + 0.1 * easeOut(seg(t, a, a + 0.12))
-    return `<div class="key" style="opacity:${o};transform:scale(${s})">${f() || '&nbsp;'}</div>`
+    return `<div class="key" style="opacity:${o};transform:scale(${s})">${f(t) || '&nbsp;'}</div>`
   }).join('')
-
-  // 回退分支的标注
-  const co = document.getElementById('callout')
-  if (t >= 40.2 && t < 46.0) {
-    const a = document.getElementById('r5'), b = document.getElementById('r6')
-    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect()
-    co.style.display = 'block'
-    co.style.left = ra.left - 8 + 'px'; co.style.top = ra.top - 3 + 'px'
-    co.style.width = ra.width + 16 + 'px'; co.style.height = rb.bottom - ra.top + 6 + 'px'
-    co.style.opacity = Math.min(seg(t, 40.2, 40.5), 1 - seg(t, 45.7, 46.0))
-  } else co.style.display = 'none'
 
   // 结尾
   const end = document.getElementById('end')
-  end.style.opacity = easeOut(seg(t, 52.0, 53.0))
-  end.style.transform = `scale(${1.03 - 0.03 * easeOut(seg(t, 52.0, 53.2))})`
+  end.style.opacity = easeOut(seg(t, 30.4, 31.3))
+  end.style.transform = `scale(${1.03 - 0.03 * easeOut(seg(t, 30.4, 31.5))})`
 }
 window.render = render
-window.DURATION = 60
+window.NARRATION = NARRATION
+window.setNarrationDurations = d => { DUR = d }
+window.DURATION = 35.5
 render(Number(new URLSearchParams(location.search).get('t') || 0))
 </script>
 </body>
