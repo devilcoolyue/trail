@@ -46,6 +46,8 @@ declare module 'claude-code' {
       selected: string
       /** A line about the summaries being made, '' when idle. */
       busy: string
+      /** The key of the element holding the pane's focus ring ('t:<turn id>' for a row). */
+      focus: string
     }
   }
 }

@@ -19,6 +19,7 @@ const filterAtom = atom({ plugin: 'trail', key: 'filter' } as const, '')
 const queryAtom = atom({ plugin: 'trail', key: 'query' } as const, '')
 const selectedAtom = atom({ plugin: 'trail', key: 'selected' } as const, '')
 const busyAtom = atom({ plugin: 'trail', key: 'busy' } as const, '')
+const focusAtom = atom({ plugin: 'trail', key: 'focus' } as const, '')
 
 type $ = EngineInterface
 
@@ -30,6 +31,23 @@ const KINDS: { kind: TrailKind | ''; label: string; color: string }[] = [
   { kind: 'debug', label: '排错', color: 'warning' },
 ]
 const kindInfo = (k: TrailKind) => KINDS.find(x => x.kind === k) ?? KINDS[0]!
+
+// 当前这一轮的底色。主题里没有背景色可用，按亮暗主题各取一个，主题从 ~/.claude.json 读一次。
+let selBackground: string | undefined
+
+async function loadSelBackground($: $): Promise<string> {
+  if (selBackground) return selBackground
+  let theme = ''
+  try {
+    const home = (await $.env.get('HOME')) ?? ''
+    const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? home
+    const path = `${dir}/.claude.json`
+    if ((await $.fs.stat(path)).size <= MAX_READ) theme = String(JSON.parse(await $.fs.read(path)).theme ?? '')
+  } catch {
+    // 读不到就按暗色主题
+  }
+  return (selBackground = theme.startsWith('light') ? '#dadada' : '#444444')
+}
 
 // ───────────────────────── 会话记录 ─────────────────────────
 
@@ -300,8 +318,17 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // 记下焦点在哪一行：这一行要事先对调颜色，引擎反色后才是想要的样子（见 seg）
+  on('ui.focus', async ($, e, next) => {
+    const result = await next(e)
+    if (e.requestId === PANE && !result.deny) await update($, focusAtom, () => e.element ?? '')
+    return result
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    const selBg = await loadSelBackground($)
+    const ring = e.props.isFocused ? await read($, focusAtom) : ''
     const cols = Math.max(30, e.props.bodyColumns)
     const all = await read($, turnsAtom)
     const filter = await read($, filterAtom)
@@ -352,9 +379,11 @@ export const register: Register = (on, options) => {
             hotkey={String(i + 1)}
             onPress={() => update($, filterAtom, () => k.kind)}
           >
-            <Text color={k.color} inverse={filter === k.kind} bold={filter === k.kind}>
-              {filter === k.kind ? ` ${k.label} ${counts(k.kind)} ` : `${k.label} ${counts(k.kind)}`}
-            </Text>
+            {filter === k.kind ? (
+              <Text color="inverseText" backgroundColor={k.color} bold>{` ${k.label} ${counts(k.kind)} `}</Text>
+            ) : (
+              <Text color={k.color}>{`${k.label} ${counts(k.kind)}`}</Text>
+            )}
           </Button>
         ))}
         {query !== '' && (
@@ -363,6 +392,33 @@ export const register: Register = (on, options) => {
           </Button>
         )}
       </Box>
+    )
+
+    // 引擎会把有焦点的按钮和鼠标下的按钮整个反色，彩色字会变成一块块色块。
+    // 所以这几种情况下事先对调前景和背景，反色后正好是 selBg 底色上的彩色字，和 Codex 面板一样：
+    // lit：焦点在这一行；hover：鼠标在这一行（引擎同时应用，不经过插件）；marked：当前这一轮，没有反色，直接画底色
+    const seg = (text: string, fg: string, o: { lit?: boolean; marked?: boolean; bold?: boolean; italic?: boolean; strike?: boolean } = {}) => (
+      <Text
+        color={o.lit ? selBg : fg}
+        backgroundColor={o.lit ? fg : o.marked ? selBg : undefined}
+        bold={o.bold}
+        italic={o.italic}
+        strikethrough={o.strike}
+        hover={{ color: selBg, backgroundColor: fg }}
+      >
+        {text}
+      </Text>
+    )
+    const hints = (items: [string, string][]) => (
+      <Text>
+        {items.map(([key, what], i) => (
+          <Text key={`h:${i}`}>
+            {i > 0 && <Text color="inactive">{'  '}</Text>}
+            <Text color="claude">{key}</Text>
+            <Text color="inactive">{` ${what}`}</Text>
+          </Text>
+        ))}
+      </Text>
     )
 
     const jump = async (t: TrailTurn) => {
@@ -378,6 +434,8 @@ export const register: Register = (on, options) => {
         deny = String(err)
       }
       if (deny) $.ui.toast(jumpFailure(t, deny))
+      // 鼠标点击不会移动焦点；挪过来，之后按 ↑↓ 从这一轮接着走
+      await $.ui.focus({ requestId: PANE, key: `t:${t.id}` }).catch(() => undefined)
     }
 
     // 非全屏时面板在输入框上方：收不到点击，也滚不动对话，Tab 移到哪一行插件也不知道。
@@ -410,19 +468,20 @@ export const register: Register = (on, options) => {
       const line = (t: TrailTurn) => {
         const info = kindInfo(t.kind)
         const isSel = t === sel
-        const head = `${isSel ? '▶' : t.isRewound ? '○' : '●'} ${pad(t.index)} `
+        const head = `${isSel ? '▌' : ' '}${t.isRewound ? '○' : '●'} ${pad(t.index)} `
         const time = clock(t.time)
         const prompt = truncate(t.prompt, cols - width(head) - width(info.label) - 1 - time.length - 2)
         const fill = Math.max(1, cols - width(head) - width(info.label) - 1 - width(prompt) - time.length - 1)
         const dim = t.isRewound
+        const o = { lit: ring === `t:${t.id}`, marked: isSel }
         return (
           <Button key={`t:${t.id}`} plain onPress={() => update($, selectedAtom, () => t.id)}>
-            <Text color={dim ? 'inactive' : info.color} bold={isSel}>{head}</Text>
-            <Text color={dim ? 'inactive' : info.color} bold={!dim}>{info.label}</Text>
-            <Text> </Text>
-            <Text color={dim ? 'inactive' : 'text'} bold={isSel} inverse={isSel} strikethrough={dim}>{prompt}</Text>
-            <Text>{' '.repeat(fill)}</Text>
-            <Text dimColor>{time}</Text>
+            {seg(head, dim ? 'inactive' : info.color, { ...o, bold: isSel })}
+            {seg(info.label, dim ? 'inactive' : info.color, { ...o, bold: !dim })}
+            {seg(' ', 'text', o)}
+            {seg(prompt, dim ? 'inactive' : 'text', { ...o, bold: isSel, strike: dim })}
+            {seg(' '.repeat(fill), 'text', o)}
+            {seg(time, 'inactive', o)}
           </Button>
         )
       }
@@ -463,71 +522,88 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // 每一轮：两行，第一行提问，第二行一句话总结
+    // 每一轮：两行，第一行提问，第二行一句话总结。
+    // 当前这一轮（面板有焦点时是焦点所在的一轮，否则是上次跳到的一轮）带底色和左侧色条，下面展开详情
+    const ringTurn = ring.startsWith('t:') ? ring.slice(2) : ''
+    const current = ringTurn && shown.some(t => t.id === ringTurn) ? ringTurn : selected
     const rows = shown.map(t => {
       const info = kindInfo(t.kind)
-      const isSel = t.id === selected
+      const isCur = t.id === current
       const [g1, g2] = gutter(all, t, isTree)
       const time = clock(t.time)
+      const bar = isCur ? '▌' : ' '
       const head = `${g1} ${pad(t.index)} `
-      const promptRoom = cols - width(head) - width(info.label) - 1 - time.length - 2
+      const promptRoom = cols - 1 - width(head) - width(info.label) - 1 - time.length - 2
       const prompt = truncate(t.prompt, promptRoom)
-      const fill = Math.max(1, cols - width(head) - width(info.label) - 1 - width(prompt) - time.length - 1)
+      const fill = Math.max(1, cols - 1 - width(head) - width(info.label) - 1 - width(prompt) - time.length - 1)
 
       const s = sumFiles(t)
       const meta = t.isRewound ? '↺ 已回退' : t.files.length > 0 ? `${t.files.length} 文件 +${s.add} −${s.del}` : ''
       const lead = `${g2}    ↳ `
-      const summary = truncate(t.summary, cols - width(lead) - width(meta) - 2)
-      const gap = Math.max(1, cols - width(lead) - width(summary) - width(meta) - 1)
+      const summary = truncate(t.summary, cols - 1 - width(lead) - width(meta) - 2)
+      const gap = Math.max(1, cols - 1 - width(lead) - width(summary) - width(meta) - 1)
 
       const dim = t.isRewound
+      const o = { lit: ring === `t:${t.id}`, marked: isCur }
       return (
         <Box key={`row:${t.id}`} flexDirection="column">
-          <Button key={`t:${t.id}`} plain onPress={() => jump(t)} autoFocus={isSel || undefined}>
-            <Text color={dim ? 'inactive' : info.color}>{head}</Text>
-            <Text color={dim ? 'inactive' : info.color} bold={!dim}>{info.label}</Text>
-            <Text> </Text>
-            <Text color={dim ? 'inactive' : 'text'} bold={isSel} strikethrough={dim}>{prompt}</Text>
-            <Text>{' '.repeat(fill)}</Text>
-            <Text dimColor>{time}</Text>
+          <Button key={`t:${t.id}`} plain onPress={() => jump(t)} autoFocus={t.id === selected || undefined}>
+            {seg(bar, info.color, o)}
+            {seg(head, dim ? 'inactive' : info.color, o)}
+            {seg(info.label, dim ? 'inactive' : info.color, { ...o, bold: !dim })}
+            {seg(' ', 'text', o)}
+            {seg(prompt, dim ? 'inactive' : 'text', { ...o, bold: isCur, strike: dim })}
+            {seg(' '.repeat(fill), 'text', o)}
+            {seg(time, 'inactive', o)}
             <Text>{'\n'}</Text>
-            <Text dimColor>{lead}</Text>
-            <Text color={dim ? 'inactive' : 'subtle'} italic={!t.isSummarized}>{summary}</Text>
-            <Text>{' '.repeat(gap)}</Text>
-            <Text color={t.isRewound ? 'inactive' : 'diffAdded'} dimColor>{meta}</Text>
+            {seg(bar, info.color, o)}
+            {seg(lead, 'inactive', o)}
+            {seg(summary, dim ? 'inactive' : isCur ? 'text' : 'subtle', { ...o, italic: !t.isSummarized })}
+            {seg(' '.repeat(gap), 'text', o)}
+            {seg(meta, t.isRewound ? 'inactive' : 'diffAdded', o)}
           </Button>
-          {isSel && detail(t, cols, Box, Text)}
         </Box>
       )
     })
+    const cur = shown.find(t => t.id === current)
 
     return (
       <Box flexDirection="column" rowGap={0}>
         {header}
         {tabs}
-        <Text dimColor>{'─'.repeat(cols)}</Text>
-        {all.length === 0 && <Text dimColor>这个会话还没有对话。</Text>}
-        {all.length > 0 && shown.length === 0 && <Text dimColor>没有匹配的对话。</Text>}
-        {rows}
-        <Text dimColor>{'─'.repeat(cols)}</Text>
-        <Text dimColor>
-          {e.props.isFocused
-            ? 'Tab 选择 · Enter 跳到原位置 · 1-5 筛选 · Esc 回到输入框'
-            : '点击某一轮跳到原位置 · /trail 关键词 可搜索'}
-        </Text>
+        <Text color="inactive">{'─'.repeat(cols)}</Text>
+        {all.length === 0 && <Text color="inactive">这个会话还没有对话。</Text>}
+        {all.length > 0 && shown.length === 0 && <Text color="inactive">没有匹配的对话。</Text>}
+        {rows.map((row, i) => (
+          <Box key={`wrap:${shown[i]!.id}`} flexDirection="column">
+            {row}
+            {cur && shown[i] === cur && detail(cur, cols, Box, Text)}
+          </Box>
+        ))}
+        <Text color="inactive">{'─'.repeat(cols)}</Text>
+        {e.props.isFocused
+          ? hints([['↑↓', '选择'], ['⏎', '跳到原位置'], ['1-5', '筛选'], ['Esc', '回到输入框']])
+          : hints([['点击', '跳到原位置'], ['ctrl+x tab', '用键盘选择'], ['/trail 关键词', '搜索']])}
       </Box>
     )
   })
 }
 
-// 选中的那一轮展开：工具、改动文件、思考量
+// 当前这一轮展开：结论、工具、改动文件、思考量
 function detail(t: TrailTurn, cols: number, Box: any, Text: any) {
   const tools = Object.entries(t.tools)
     .sort((a, b) => b[1] - a[1])
     .map(([name, n]) => `${name}×${n}`)
     .join(' · ')
+  const answer = wrap(plainAnswer(t.answer), cols - 13, 4)
   return (
     <Box flexDirection="column" paddingLeft={7}>
+      {answer.map((l, i) => (
+        <Text key={`ans:${i}`}>
+          <Text color="inactive">{i === 0 ? '结论  ' : '      '}</Text>
+          <Text>{l}</Text>
+        </Text>
+      ))}
       {tools !== '' && (
         <Text>
           <Text dimColor>工具  </Text>

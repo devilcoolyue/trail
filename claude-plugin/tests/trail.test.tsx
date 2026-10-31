@@ -230,3 +230,39 @@ test('非全屏时面板在输入框上方：标题和按键说明一直在，j/
   expect(await ui.find({ type: 'Text', text: /已加唯一索引/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('焦点移到哪一轮就展开哪一轮；这一行事先对调颜色，引擎反色后是底色上的彩色字', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'trail' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 's1' }))
+  on('session.root', () => ({ value: '/p' }))
+  on('session.cwd', () => ({ value: '/p' }))
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: TRANSCRIPT.length, mtimeMs: 0, isLink: false } }))
+  on('fs.read', () => ({ value: TRANSCRIPT }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('store.delete', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
+  on('ui.focus', () => ({}))
+  on('ui.log', () => ({ value: undefined }))
+
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'trail', args: '' } as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /结论/ })).toBeUndefined()
+
+  // 引擎在用户按 Tab 或方向键时发出的事件
+  await $.ui.focus({ component: 'Pane', requestId: 'trail', plugin: 'trail', element: 't:u1', origin: { kind: 'person' } } as any)
+  expect(await ui.find({ type: 'Text', text: /结论/ })).toBeDefined()
+  const prompt = (await ui.find({ type: 'Text', text: '给我设计一个幂等方案' })) as any
+  expect(prompt.props.color).toBe('#444444')
+  expect(prompt.props.backgroundColor).toBe('text')
+  // 别的行是普通颜色（悬停时的对调由界面自己做，测试工具里看不到 hover）
+  const other = (await ui.find({ type: 'Text', text: '改用唯一索引实现' })) as any
+  expect(other.props.color).toBe('text')
+  expect(other.props.backgroundColor).toBeUndefined()
+  await ui.unmount()
+})
