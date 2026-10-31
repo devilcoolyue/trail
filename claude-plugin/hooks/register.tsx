@@ -20,6 +20,11 @@ const queryAtom = atom({ plugin: 'trail', key: 'query' } as const, '')
 const selectedAtom = atom({ plugin: 'trail', key: 'selected' } as const, '')
 const busyAtom = atom({ plugin: 'trail', key: 'busy' } as const, '')
 const focusAtom = atom({ plugin: 'trail', key: 'focus' } as const, '')
+const topAtom = atom({ plugin: 'trail', key: 'top' } as const, -1)
+const revealAtom = atom({ plugin: 'trail', key: 'reveal' } as const, '')
+
+// 全屏时列表由插件自己滚动，标题、筛选和按键说明固定不动。记下最近一次画出来的位置，滚轮从这里接着算
+const listWindow = { isOwn: false, top: 0, maxTop: 0 }
 
 type $ = EngineInterface
 
@@ -165,6 +170,9 @@ async function summarizeMissing($: $, mode: string) {
 
 async function openPane($: $, query: string, mode: string, isFullscreen: boolean): Promise<string> {
   await update($, queryAtom, () => query)
+  // 打开时显示最近的几轮
+  await update($, topAtom, () => -1)
+  await update($, revealAtom, () => '')
   const problem = await refresh($)
   const opened = await $.ui.open({ id: PANE, title: '对话索引', focus: true })
   $.clock.after(1, () => summarizeMissing($, mode).catch(err => logError($, err)))
@@ -321,8 +329,22 @@ export const register: Register = (on, options) => {
   // 记下焦点在哪一行：这一行要事先对调颜色，引擎反色后才是想要的样子（见 seg）
   on('ui.focus', async ($, e, next) => {
     const result = await next(e)
-    if (e.requestId === PANE && !result.deny) await update($, focusAtom, () => e.element ?? '')
+    if (e.requestId === PANE && !result.deny) {
+      await update($, focusAtom, () => e.element ?? '')
+      await update($, revealAtom, () => e.element ?? '')
+    }
     return result
+  })
+
+  // 滚轮、PgUp/PgDn 只滚中间的列表：引擎的窗口不动（面板内容正好一屏），插件挪自己的起点
+  on('ui.scroll', async ($, e, next) => {
+    if (e.component !== 'Pane' || e.requestId !== PANE || !listWindow.isOwn || e.origin.kind !== 'person') return next(e)
+    if (e.by === 0) return {}
+    const step = Math.sign(e.by) * Math.max(1, Math.round(Math.abs(e.by) / 2))
+    const top = Math.max(0, listWindow.top + step)
+    await update($, revealAtom, () => '')
+    await update($, topAtom, () => (top >= listWindow.maxTop ? -1 : top))
+    return {}
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -441,6 +463,7 @@ export const register: Register = (on, options) => {
     // 非全屏时面板在输入框上方：收不到点击，也滚不动对话，Tab 移到哪一行插件也不知道。
     // 改由 j/k 选中，只画放得下的几行，标题、提示和按键说明一直看得见；选中的一轮直接展开回答
     if (e.props.placement === 'inline') {
+      listWindow.isOwn = false
       const at = shown.findIndex(t => t.id === selected)
       const i = at >= 0 ? at : shown.length - 1
       const sel = shown[i]
@@ -567,26 +590,83 @@ export const register: Register = (on, options) => {
     })
     const cur = shown.find(t => t.id === current)
 
+    // 列表窗口：面板一屏放得下的行数减去固定的标题、筛选、两条分隔线和按键说明
+    const footer = e.props.isFocused
+      ? ([['↑↓', '选择'], ['⏎', '跳到原位置'], ['滚轮', '翻页'], ['1-5', '筛选'], ['Esc', '回到输入框']] as [string, string][])
+      : ([['点击', '跳到原位置'], ['滚轮', '翻页'], ['ctrl+x tab', '用键盘'], ['/trail 关键词', '搜索']] as [string, string][])
+    const footerWidth = footer.reduce((w, [k, v], i) => w + (i > 0 ? 2 : 0) + width(k) + 1 + width(v), 0)
+    const tabsWidth =
+      KINDS.reduce((w, k) => w + 4 + width(`${k.label} ${counts(k.kind)}`) + (filter === k.kind ? 2 : 0), 0) +
+      (query !== '' ? width(`“${truncate(query, 16)}” ${shown.length} 条 ✕`) + 1 : 0)
+    const lines = (w: number) => Math.max(1, Math.ceil(w / cols))
+    const fixed = 1 + (busy !== '' ? 1 : 0) + lines(tabsWidth) + 2 + lines(footerWidth)
+    const listRows = Math.max(2, e.props.scroll.bodyRows - fixed)
+    const heights = shown.map(t => 2 + (t === cur ? detailHeight(t, cols) : 0))
+    const endFrom = (from: number) => {
+      let h = 0
+      let i = from
+      while (i < shown.length && h + heights[i]! <= listRows) h += heights[i++]!
+      return Math.max(i, Math.min(shown.length, from + 1))
+    }
+    let maxTop = shown.length
+    for (let h = 0; maxTop > 0 && h + heights[maxTop - 1]! <= listRows; ) h += heights[--maxTop]!
+    const stored = await read($, topAtom)
+    let top = stored < 0 ? maxTop : Math.min(stored, maxTop)
+    // 焦点移到窗口边上时，带上它前后各一轮，↑↓ 才有下一行可走
+    const reveal = await read($, revealAtom)
+    const ri = shown.findIndex(t => `t:${t.id}` === reveal)
+    if (ri >= 0) {
+      if (ri <= top) top = Math.max(0, ri - 1)
+      else while (top < ri && endFrom(top) <= Math.min(shown.length - 1, ri + 1)) top++
+      top = Math.min(top, maxTop)
+    }
+    const end = endFrom(top)
+    Object.assign(listWindow, { isOwn: true, top, maxTop })
+    const range = shown.length > end - top ? ` ${top + 1}–${end} / ${shown.length} ` : ''
+    const rule = (label: string) => (
+      <Box flexShrink={0}>
+        <Text color="inactive">{'─'.repeat(Math.max(0, cols - width(label) - 1)) + label + '─'}</Text>
+      </Box>
+    )
+
     return (
-      <Box flexDirection="column" rowGap={0}>
-        {header}
-        {tabs}
-        <Text color="inactive">{'─'.repeat(cols)}</Text>
-        {all.length === 0 && <Text color="inactive">这个会话还没有对话。</Text>}
-        {all.length > 0 && shown.length === 0 && <Text color="inactive">没有匹配的对话。</Text>}
-        {rows.map((row, i) => (
-          <Box key={`wrap:${shown[i]!.id}`} flexDirection="column">
-            {row}
-            {cur && shown[i] === cur && detail(cur, cols, Box, Text)}
+      <Box flexDirection="column" height={e.props.scroll.bodyRows}>
+        {/* 只有列表能被压缩：别的行估算差一行时，也是列表少一行，标题和按键说明不动 */}
+        <Box flexDirection="column" flexShrink={0}>
+          {header}
+          {tabs}
+        </Box>
+        {rule(range && top > 0 ? ` ↑${range}` : range)}
+        <Box flexDirection="column" height={listRows} flexShrink={1} overflow="hidden">
+          {all.length === 0 && <Text color="inactive">这个会话还没有对话。</Text>}
+          {all.length > 0 && shown.length === 0 && <Text color="inactive">没有匹配的对话。</Text>}
+          {/* 每一轮都画出来，靠上移把窗口外的裁掉：只画窗口里的几行的话，焦点所在行前面一插入新行，
+              Claude Code 的 ↑↓ 就会走乱（它按位置记焦点） */}
+          <Box flexDirection="column" flexShrink={0} marginTop={-heights.slice(0, top).reduce((a, b) => a + b, 0)}>
+            {rows.map((row, k) => (
+              <Box key={`wrap:${shown[k]!.id}`} flexDirection="column" flexShrink={0}>
+                {row}
+                {cur && shown[k] === cur && detail(cur, cols, Box, Text)}
+              </Box>
+            ))}
           </Box>
-        ))}
-        <Text color="inactive">{'─'.repeat(cols)}</Text>
-        {e.props.isFocused
-          ? hints([['↑↓', '选择'], ['⏎', '跳到原位置'], ['1-5', '筛选'], ['Esc', '回到输入框']])
-          : hints([['点击', '跳到原位置'], ['ctrl+x tab', '用键盘选择'], ['/trail 关键词', '搜索']])}
+        </Box>
+        {rule(end < shown.length ? ` ↓ 还有 ${shown.length - end} 轮 ` : '')}
+        <Box flexShrink={0}>{hints(footer)}</Box>
       </Box>
     )
   })
+}
+
+/** detail() 画出来有几行，算列表窗口用。 */
+function detailHeight(t: TrailTurn, cols: number): number {
+  return (
+    wrap(plainAnswer(t.answer), cols - 13, 4).length +
+    (Object.keys(t.tools).length > 0 ? 1 : 0) +
+    (t.thinkingChars > 0 ? 1 : 0) +
+    Math.min(8, t.files.length) +
+    (t.files.length > 8 ? 1 : 0)
+  )
 }
 
 // 当前这一轮展开：结论、工具、改动文件、思考量

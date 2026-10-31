@@ -266,3 +266,57 @@ test('焦点移到哪一轮就展开哪一轮；这一行事先对调颜色，�
   expect(other.props.backgroundColor).toBeUndefined()
   await ui.unmount()
 })
+
+test('全屏时标题和按键说明固定，滚轮只滚中间的列表，焦点移到哪一轮就滚到哪一轮', async ($, on) => {
+  const rows: string[] = []
+  let parent: string | null = null
+  for (let i = 1; i <= 12; i++) {
+    const at = (m: number) => `2026-10-30T02:${String(i * 4 + m).padStart(2, '0')}:00Z`
+    rows.push(row({ type: 'user', uuid: `u${i}`, parentUuid: parent, timestamp: at(0), message: { role: 'user', content: `第${i}个问题` } }))
+    rows.push(row({ type: 'assistant', uuid: `a${i}`, parentUuid: `u${i}`, timestamp: at(1), message: { role: 'assistant', content: [{ type: 'text', text: `第${i}个回答。` }] } }))
+    parent = `a${i}`
+  }
+  const text = rows.join('\n')
+  on('command.register', () => ({ value: { command: 'trail' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 's1' }))
+  on('session.root', () => ({ value: '/p' }))
+  on('session.cwd', () => ({ value: '/p' }))
+  on('env.get', () => ({ value: undefined }))
+  on('fs.exists', () => ({ value: true }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: text.length, mtimeMs: 0, isLink: false } }))
+  on('fs.read', () => ({ value: text }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('store.delete', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
+  on('ui.focus', () => ({}))
+  on('ui.log', () => ({ value: undefined }))
+
+  await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'trail', args: '' } as any)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, scroll: { offset: 0, bodyRows: 14 } } })
+  const has = async (re: RegExp) => (await ui.find({ type: 'Text', text: re })) !== undefined
+
+  // 一屏 14 行：标题、筛选、两条分隔线、按键说明占 5 行，列表放得下 4 轮，打开时显示最后 4 轮。
+  // 每一轮都在树里（窗口外的靠上移裁掉），所以看分隔线上的范围
+  expect(await has(/对话索引/)).toBe(true)
+  expect(await has(/跳到原位置/)).toBe(true)
+  expect(await has(/↑ 9–12 \/ 12/)).toBe(true)
+
+  // 滚轮往上一格（两行，一轮）：列表上移，标题和按键说明还在
+  const wheel = (by: number) =>
+    $.ui.scroll({ component: 'Pane', requestId: 'trail', offset: 0, by, bodyRows: 14, contentRows: 14, origin: { kind: 'person' } } as any)
+  await wheel(-2)
+  expect(await has(/8–11 \/ 12/)).toBe(true)
+  expect(await has(/↓ 还有 1 轮/)).toBe(true)
+  expect(await has(/对话索引/)).toBe(true)
+  expect(await has(/跳到原位置/)).toBe(true)
+
+  // 焦点移到第 2 轮：窗口跟过去，并带上它前面一轮
+  await $.ui.focus({ component: 'Pane', requestId: 'trail', plugin: 'trail', element: 't:u2', origin: { kind: 'person' } } as any)
+  expect(await has(/ 1–4 \/ 12/)).toBe(true)
+  expect(await has(/↓ 还有 8 轮/)).toBe(true)
+  await ui.unmount()
+})

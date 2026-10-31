@@ -48,6 +48,10 @@ declare module 'claude-code' {
       busy: string
       /** The key of the element holding the pane's focus ring ('t:<turn id>' for a row). */
       focus: string
+      /** The first turn the pane's list shows (the plugin scrolls it itself); -1 pins it to the end. */
+      top: number
+      /** The row the list must bring into view on the next draw ('t:<turn id>'), '' when none. */
+      reveal: string
     }
   }
 }
