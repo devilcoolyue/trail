@@ -8,14 +8,14 @@
 | | Claude Code | Codex |
 |---|---|---|
 | 形式 | 原生插件，`claude-plugin/` | 独立终端面板 `trail`（Go） |
-| 打开方式 | 输入 `/trail [搜索词]` | tmux 快捷键弹出 |
+| 打开方式 | 输入 `/trail [搜索词]` | 用 `trail codex` 启动，按 `Ctrl-]` 弹出 |
 | 跳转 | Claude Code 自己把对话滚到那一轮 | tmux copy-mode 搜索提问文字 |
 | 总结 | 插件里调用 haiku | 调用本机的 `claude -p --model haiku` |
 
 运行环境：先支持 macOS，Linux 也能用。
 
 - Claude Code 插件：Claude Code 2.1.275 及以上可以一步安装；已在 2.1.312 上测试。
-- Codex 面板：tmux 3.2 及以上（需要 `display-popup`）；已在 Codex 0.165 上测试。
+- Codex 面板：tmux 3.2 及以上（需要 `display-popup`，安装脚本会自动装）；已在 Codex 0.165 上测试。
   自己编译需要 Go 1.24 及以上。
 
 ## Claude Code 插件
@@ -75,50 +75,64 @@ claude --plugin-dir /path/to/trail/claude-plugin
 
 ## Codex 面板（也能浏览 Claude Code 会话）
 
+Codex 的插件只能提供技能、MCP 和 hooks，没法往界面里加面板，所以 trail 借助 tmux：
+面板是盖在 Codex 上的弹窗，跳转靠 tmux 在历史里搜索提问文字。tmux 由 `trail codex` 自动配置，不用自己学。
+
 ### 安装
 
-从 [Releases](https://github.com/devilcoolyue/trail/releases) 下载对应系统的压缩包，解压后把 `trail` 放到 `PATH` 里的目录，比如：
+一行命令（macOS / Linux），会下载对应系统的 trail、校验 SHA256 并放进 `PATH`；没有 tmux 时用 Homebrew 装上：
 
 ```bash
-tar xzf trail_v0.1.0_darwin_arm64.tar.gz   # Intel Mac 用 darwin_amd64
-mv trail /usr/local/bin/
-# 浏览器下载的文件，macOS 第一次运行可能会拦截，用下面这行解除
-xattr -d com.apple.quarantine /usr/local/bin/trail
+curl -fsSL https://raw.githubusercontent.com/devilcoolyue/trail/main/install.sh | sh
 ```
 
-或者用 Go 安装、自己编译：
+也可以从 [Releases](https://github.com/devilcoolyue/trail/releases) 手动下载，或者用 Go 安装：
 
 ```bash
 go install github.com/devilcoolyue/trail@latest
-# 或者
-git clone https://github.com/devilcoolyue/trail && cd trail && go build -o trail .
 ```
 
-### 让 Codex 不进全屏界面（跳转需要）
+浏览器下载的压缩包，macOS 第一次运行可能会拦截，用 `xattr -d com.apple.quarantine <trail 的路径>` 解除。
 
-Codex 默认使用全屏界面，对话内容不会进入 tmux 的历史记录，tmux 也就搜不到。在 `~/.codex/config.toml` 里加上：
+### 使用
 
-```toml
-[tui]
-alternate_screen = "never"
+在项目目录里用 `trail codex` 代替 `codex` 启动，参数照常传给 Codex（比如 `trail codex resume --last`）：
+
+```bash
+trail codex
 ```
 
-或者每次用 `codex --no-alt-screen` 启动。没有设置时，在面板里按回车会提示这一步，不会跳转。
+对话时按 `Ctrl-]` 打开对话索引。选中一轮按回车，弹窗关闭，终端停在那一轮的提问处，下面紧跟回答；
+看完按 `q` 回到 Codex 继续输入。滚轮可以翻看更早的对话。
 
-### 绑定 tmux 快捷键
+`trail codex` 做了这些事：
 
-`~/.tmux.conf`：
+- 在 trail 专用的 tmux（`tmux -L trail`）里运行 Codex，和你自己的 tmux 互不影响；
+  会先读你的 `~/.tmux.conf`，prefix 等设置照旧，再加上 trail 需要的设置。
+- 以 `--no-alt-screen` 启动 Codex：对话留在终端历史里，跳转才搜得到；历史保留 20 万行。
+- 底部状态栏提示快捷键；关掉终端窗口时 Codex 一起结束，和直接运行 `codex` 一样。
+
+已经在 tmux 里运行 `trail codex` 的话，Codex 就在当前 pane 里启动，`Ctrl-]` 绑到当前这个 tmux（不改配置文件）。
+
+### 自己用 tmux
+
+想直接在自己的 tmux 里运行 `codex`，运行一次：
+
+```bash
+trail setup
+```
+
+它会在 `~/.codex/config.toml` 的 `[tui]` 里加上 `alternate_screen = "never"`，在 `~/.tmux.conf` 末尾加上
+`prefix + t` 和 `Ctrl-]` 两个快捷键（以及 `history-limit`），改动前先备份成 `.trail-bak`；tmux 正在运行时会让它重新读配置。
+再运行一次不会重复添加。手动配置的话，`~/.tmux.conf` 里加一行：
 
 ```tmux
-# prefix + t 弹出索引面板，盖在 Codex 上方
-bind-key t display-popup -E -w 92% -h 88% trail
+bind-key t display-popup -E -w 92% -h 88% /usr/local/bin/trail
 ```
 
-如果弹窗提示找不到 `trail`，把它换成完整路径（`which trail` 可以查到）。
-如果你的 tmux 没有设置 prefix 键，可以改成不需要 prefix 的按键，比如 `bind-key -n F2 display-popup ...`。
+`tmux source ~/.tmux.conf` 只能在 tmux 已经运行时用；没启动 tmux 时会报 `error connecting to ...`，直接运行 `tmux` 就会读配置。
 
 在运行 Codex 的 tmux pane 里按快捷键，面板会自动选中这个 pane 里正在进行的会话（标着「● 当前终端」）。
-选中一轮按回车，弹窗关闭，下面的 pane 进入 copy-mode，那一轮的提问停在屏幕顶部；按 `q` 退出 copy-mode。
 
 `codex exec` 这类一次性的非交互调用（比如其他程序用它生成标题）不会列出来；Claude Code 的 `claude -p` 等 SDK 调用中，
 只有一轮、也没用工具的会话同样不列。
@@ -165,4 +179,5 @@ bind-key t display-popup -E -w 92% -h 88% trail
   - `sessions.go`：查找最近的会话，识别 tmux pane 里正在运行的会话
   - `summarize.go`：调用 `claude -p --model haiku` 总结并缓存
   - `ui.go`：界面；`jump.go`：tmux 跳转；`demo.go`：演示数据
+  - `launch.go`：`trail codex`；`setup.go`：`trail setup`；`install.sh`：一键安装
   - `go test ./...` 运行解析器测试；`TRAIL_REAL_CODEX=<目录>` 或 `TRAIL_REAL_CLAUDE=<目录> go test -run TestDumpReal -v` 打印一批真实会话的解析结果

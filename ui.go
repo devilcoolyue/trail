@@ -577,6 +577,9 @@ func (m model) jump() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := m.session()
+	if m.jumper == nil && !m.demo {
+		return m.flash("不在 tmux 里，跳不回原位置 · 用 trail codex 启动 Codex，再按 Ctrl-] 打开面板")
+	}
 	if !s.Live {
 		return m.flash(fmt.Sprintf("该会话不在当前终端 · 可执行 %s 恢复", s.ResumeCmd()))
 	}
@@ -584,7 +587,7 @@ func (m model) jump() (tea.Model, tea.Cmd) {
 		return m.flash("Claude Code 会话请在 Claude Code 里输入 /trail，点击即可跳回原位置")
 	}
 	if m.jumper == nil {
-		return m.flash(fmt.Sprintf("演示模式（未检测到 tmux）· 将定位第 %d 轮「%s…」", t.Index, t.Anchor))
+		return m.flash(fmt.Sprintf("演示模式（不在 tmux 里）· 将定位第 %d 轮「%s…」", t.Index, t.Anchor))
 	}
 	if err := m.jumper.Ready(); err != nil {
 		return m.flash(err.Error())

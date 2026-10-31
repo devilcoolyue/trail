@@ -10,7 +10,7 @@
       "name": "trail",
       "source": "./claude-plugin",
       "description": "对话索引面板：/trail 按轮次浏览、筛选、搜索当前会话，点击跳回对话原位置",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }

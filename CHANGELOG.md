@@ -1,5 +1,14 @@
 # 更新记录
 
+## v0.1.1 · 2026-10-31
+
+Codex 面板不用再自己配置 tmux。
+
+- `trail codex`：在 trail 专用的 tmux 里启动 Codex（自动 `--no-alt-screen`、历史 20 万行），按 `Ctrl-]` 打开面板。
+- `trail setup`：给自己用 tmux 的人，一次配好 `~/.codex/config.toml` 和 `~/.tmux.conf`，可重复运行。
+- `install.sh`：`curl … | sh` 一键安装，校验 SHA256，缺 tmux 时用 Homebrew 安装。
+- 不在 tmux 里打开面板时，按回车提示改用 `trail codex`，不再显示「演示模式」。
+
 ## v0.1.0 · 2026-10-30
 
 第一个版本。
