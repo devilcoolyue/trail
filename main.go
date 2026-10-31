@@ -65,7 +65,8 @@ func main() {
 	}
 
 	m := newModel(sessions, jumper, start, *demo)
-	res, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
+	// AllMotion：不按键移动鼠标也会收到事件，用来高亮鼠标所在的行
+	res, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion()).Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "trail:", err)
 		os.Exit(1)

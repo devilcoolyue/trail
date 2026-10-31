@@ -14,6 +14,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// cHover 是鼠标所在的行，比底色稍亮的灰，和选中行的深蓝分开。
+// 256 色终端里自动换算会把深灰变成 #5f5f5f 或近乎黑色，所以每种色深各给一个值。
+var cHover = lipgloss.CompleteColor{TrueColor: "#3A3A3A", ANSI256: "237", ANSI: "8"}
+
 // ───────────────────────── 配色 ─────────────────────────
 
 var (
@@ -95,6 +99,9 @@ type model struct {
 	mode    viewMode
 	sessSel int
 
+	// 鼠标所在的那一轮（visible 的下标）和那个会话，-1 表示不在任何一行上
+	hover, hoverSess int
+
 	w, h int
 
 	jumper     Jumper
@@ -122,7 +129,7 @@ func newModel(sessions []Session, j Jumper, start int, demo bool) model {
 	ti.Cursor.Style = fg(cAccent)
 
 	m := model{sessions: sessions, input: ti, jumper: j, vp: viewport.New(0, 0), demo: demo,
-		summarizing: map[string]bool{}}
+		summarizing: map[string]bool{}, hover: -1, hoverSess: -1}
 	if !demo {
 		m.cache = loadSummaryCache()
 		for i := range m.sessions {
@@ -337,9 +344,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		return m.onMouse(msg)
+		next, cmd := m.onMouse(msg)
+		if nm, ok := next.(model); ok {
+			// 滚动、点击之后列表可能挪了，按鼠标现在的位置重新算
+			nm.hover, nm.hoverSess = nm.rowAt(msg.X, msg.Y)
+			return nm, cmd
+		}
+		return next, cmd
 
 	case tea.KeyMsg:
+		m.hover, m.hoverSess = -1, -1 // 用键盘时不留悬停的高亮
 		if m.searching {
 			return m.onSearchKey(msg)
 		}
@@ -497,6 +511,33 @@ func (m model) onSessionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+// rowAt 返回鼠标位置下的那一轮（visible 的下标）和那个会话，不在任何一行上时是 -1。
+func (m model) rowAt(x, y int) (turn, sess int) {
+	turn, sess = -1, -1
+	if x >= m.listW() {
+		return
+	}
+	row := y - bodyTop - 1
+	if row < 0 {
+		return
+	}
+	if m.mode == modeSessions {
+		for _, r := range m.sessionRows() {
+			if r.idx >= 0 && (r.y == row || r.y+1 == row) {
+				sess = r.idx
+			}
+		}
+		return
+	}
+	if row >= m.listRows()*2 {
+		return
+	}
+	if i := m.top + row/2; i < len(m.visible) {
+		turn = i
+	}
+	return
 }
 
 func (m model) onMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -958,6 +999,8 @@ func (m model) viewList() string {
 		var r1, r2 row
 		if sel {
 			r1.bg, r2.bg = cSel, cSel
+		} else if i == m.hover {
+			r1.bg, r2.bg = cHover, cHover
 		}
 		bar := " "
 		if sel {
@@ -1219,6 +1262,8 @@ func (m model) viewSessions() string {
 		var r1, r2 row
 		if sel {
 			r1.bg, r2.bg = cSel, cSel
+		} else if r.idx == m.hoverSess {
+			r1.bg, r2.bg = cHover, cHover
 		}
 		bar := " "
 		if sel {
